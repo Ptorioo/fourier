@@ -25,7 +25,7 @@ npm install
 npm run setup
 npm run doctor
 npm test
-pi install D:/Code/fourier
+pi install path/to/fourier
 ```
 
 Reload Pi (`/reload`) or start a new session. Use `/fourier` for a summary, `/skill:audio-analysis` for measurements, or `/skill:juce-development` for writing plug-ins. `pi install` registers the local package; this repository has not been published to npm. Setup compiles the TypeScript backend into `dist/`; `npm test` runs the checks. Nothing is installed globally. Published/packed packages include compiled JavaScript, so their CLI does not need a compiler at runtime.
