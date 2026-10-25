@@ -4,7 +4,7 @@ const controller = new AbortController();
 process.once('SIGINT', () => controller.abort());
 process.once('SIGTERM', () => controller.abort());
 try {
-  const result = await runBackend(process.argv.slice(2), { signal: controller.signal });
+  const result = await runBackend(process.argv.slice(2), { signal: controller.signal, stdin: 'inherit' });
   if (result.stdout) process.stdout.write(result.stdout);
   if (result.stderr) process.stderr.write(result.stderr);
   if (result.reason) process.stderr.write(resultText({ ...result, stdout: '', stderr: '' }) + '\n');

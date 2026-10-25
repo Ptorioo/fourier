@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, existsSync, rmSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, writeFileSync, existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -16,6 +17,30 @@ test('doctor runs without loading native plug-ins', async () => {
   const result = await runBackend(['doctor'], { cwd: packageRoot });
   assert.equal(result.code, 0, result.stderr);
   assert.equal(JSON.parse(result.stdout).sandbox, false);
+});
+test('CLI forwards stdin for plans and JUCE projects while preserving validation', t => {
+  const dir = mkdtempSync(join(tmpdir(), 'fourier-cli input-')); t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const cli = (args, input) => spawnSync(process.execPath, [join(packageRoot, 'scripts/fourier.mjs'), ...args], {
+    cwd: dir, input, encoding: 'utf8', timeout: 30000, windowsHide: true,
+  });
+  const plan = join(dir, 'plan é.json');
+  const initialized = cli(['init', '--plugin', 'builtin:gain', '--out', plan, '--options-stdin'], JSON.stringify({ duration: .25, parameters: { gain_db: -6 } }));
+  assert.equal(initialized.status, 0, initialized.stdout + initialized.stderr);
+  assert.equal(JSON.parse(readFileSync(plan, 'utf8')).parameters.gain_db, -6);
+  const project = join(dir, 'project é');
+  const created = cli(['juce', 'create', '--options-stdin'], JSON.stringify({ project_directory: project, name: 'CliFixture', kind: 'effect', manufacturer_code: 'Test', plugin_code: 'Clif' }));
+  assert.equal(created.status, 0, created.stdout + created.stderr);
+  assert.ok(existsSync(join(project, 'PluginProcessor.cpp')));
+  const invalidPlan = join(dir, 'invalid.json');
+  for (const [input, error] of [['', /Invalid tool options/], ['{broken', /Invalid tool options/], ['{"extra":true}', /Unknown/], [' '.repeat(1_000_001), /1,000,000-byte limit/]]) {
+    const result = cli(['init', '--plugin', 'builtin:gain', '--out', invalidPlan, '--options-stdin'], input);
+    assert.equal(result.status, 1, result.stdout + result.stderr);
+    assert.match(result.stdout, error);
+    assert.equal(existsSync(invalidPlan), false);
+  }
+  const doctor = cli(['doctor'], undefined);
+  assert.equal(doctor.status, 0, doctor.stdout + doctor.stderr);
+  assert.equal(JSON.parse(doctor.stdout).audio_ready, true);
 });
 test('arguments are not interpreted as shell commands', async () => {
   const result = await runBackend(['doctor; echo NOT_A_SHELL'], { cwd: packageRoot });

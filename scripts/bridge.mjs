@@ -36,15 +36,15 @@ function killTree(child) {
 
 /**
  * @param {string[]} args
- * @param {{cwd?: string, signal?: AbortSignal, timeoutMs?: number, input?: string}} options
+ * @param {{cwd?: string, signal?: AbortSignal, timeoutMs?: number, input?: string, stdin?: 'ignore' | 'inherit'}} options
  */
-export function runBackend(args, { cwd = process.cwd(), signal, timeoutMs = 600_000, input } = {}) {
+export function runBackend(args, { cwd = process.cwd(), signal, timeoutMs = 600_000, input, stdin = 'ignore' } = {}) {
   if (signal?.aborted) return Promise.reject(new Error('Fourier cancelled before launch'));
   const cli = join(packageRoot, 'dist', 'cli.js');
   if (!existsSync(cli)) return Promise.reject(new Error('Fourier is not built. Run npm run build (or npm run setup).'));
   return new Promise((resolveResult, reject) => {
     const child = spawn(process.execPath, [cli, ...args], {
-      cwd, shell: false, windowsHide: true, detached: process.platform !== 'win32', stdio: [input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
+      cwd, shell: false, windowsHide: true, detached: process.platform !== 'win32', stdio: [input === undefined ? stdin : 'pipe', 'pipe', 'pipe'],
     });
     if (child.stdin) {
       child.stdin.on('error', () => { /* Early parser/launch failure is reported by exit/error below. */ });
