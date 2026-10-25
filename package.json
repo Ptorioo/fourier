@@ -1,0 +1,26 @@
+{
+  "name": "pi-fourier",
+  "version": "0.1.0",
+  "description": "Reproducible audio plug-in analysis and local JUCE VST3 authoring for Pi, with optional REA MCP evidence.",
+  "type": "module",
+  "keywords": ["pi-package", "audio", "dsp", "vst3", "mcp"],
+  "engines": {"node": ">=22.2.0"},
+  "bin": {"fourier-audio": "scripts/fourier.mjs"},
+  "files": ["src", "dist", "scripts", "native/CMakeLists.txt", "native/main.cpp", "templates", "skills", "docs", "tests", "tsconfig.json", "tsconfig.build.json", "README.md", "CHANGELOG.md"],
+  "pi": {"extensions": ["./src/index.ts"], "skills": ["./skills/audio-analysis", "./skills/juce-development"]},
+  "peerDependencies": {"@earendil-works/pi-ai": "*", "@earendil-works/pi-coding-agent": ">=1.4.0"},
+  "peerDependenciesMeta": {"@earendil-works/pi-ai": {"optional": true}, "@earendil-works/pi-coding-agent": {"optional": true}},
+  "devDependencies": {"@earendil-works/pi-ai": "1.4.0", "@earendil-works/pi-coding-agent": "1.4.0", "@types/node": "^26.6.5", "typescript": "~5.9.3"},
+  "scripts": {
+    "build": "node node_modules/typescript/bin/tsc -p tsconfig.build.json",
+    "setup": "node scripts/setup.mjs",
+    "setup:native": "node scripts/fourier.mjs setup-native",
+    "doctor": "node scripts/fourier.mjs doctor",
+    "test": "npm run build && node --test tests/*.test.mjs && node scripts/fourier.mjs self-test",
+    "test:node": "npm run build && node --test tests/*.test.mjs",
+    "prepack": "npm run build",
+    "check": "node --check scripts/bridge.mjs && node --check scripts/rea.mjs && node --check scripts/fourier.mjs && node --check scripts/setup.mjs",
+    "typecheck": "node node_modules/typescript/bin/tsc --noEmit",
+    "pack:check": "npm pack --dry-run"
+  }
+}

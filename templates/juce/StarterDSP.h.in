@@ -1,0 +1,125 @@
+#pragma once
+#ifndef FOURIER_STARTER
+#define FOURIER_STARTER @DSP_ID@
+#endif
+#include <juce_audio_utils/juce_audio_utils.h>
+#include <array>
+#include <cmath>
+
+// Small, explicit teaching algorithms, not models of a particular commercial plug-in.
+inline juce::AudioProcessorValueTreeState::ParameterLayout starterParameters()
+{
+    juce::AudioProcessorValueTreeState::ParameterLayout layout;
+    const auto add = [&layout](const char* id, const char* name, float lo, float hi, float initial) {
+        layout.add(std::make_unique<juce::AudioParameterFloat>(juce::ParameterID{id, 1}, name,
+            juce::NormalisableRange<float>{lo, hi}, initial));
+    };
+    layout.add(std::make_unique<juce::AudioParameterFloat>(juce::ParameterID{"gain_db", 1}, "Gain dB", juce::NormalisableRange<float>{-60.0f, 12.0f, 0.1f}, 0.0f));
+    juce::ignoreUnused(add);
+#if FOURIER_STARTER == 1
+    layout.add(std::make_unique<juce::AudioParameterChoice>(juce::ParameterID{"mode", 1}, "Filter mode", juce::StringArray{"Low pass", "High pass", "Peak EQ"}, 0));
+    add("frequency_hz", "Frequency Hz", 20, 20000, 1000); add("q", "Q", 0.1f, 10, 0.7071f); add("eq_db", "EQ dB", -24, 24, 0);
+#elif FOURIER_STARTER == 2
+    add("threshold_db", "Threshold dB", -60, 0, -18); add("ratio", "Ratio", 1, 20, 4);
+    add("attack_ms", "Attack ms", 0.1f, 200, 10); add("release_ms", "Release ms", 5, 2000, 100); add("knee_db", "Knee dB", 0, 24, 6);
+#elif FOURIER_STARTER == 3
+    add("drive_db", "Drive dB", 0, 36, 6); add("mix", "Wet mix", 0, 1, 1);
+#elif FOURIER_STARTER == 4
+    add("delay_ms", "Delay ms", 1, 2000, 250); add("feedback", "Feedback", 0, 0.95f, 0.3f); add("mix", "Wet mix", 0, 1, 0.5f);
+#elif FOURIER_STARTER == 6
+    layout.add(std::make_unique<juce::AudioParameterChoice>(juce::ParameterID{"waveform", 1}, "Waveform", juce::StringArray{"Sine", "Saw", "Square"}, 1));
+    add("cutoff_hz", "Cutoff Hz", 20, 20000, 3000); add("attack_s", "Attack s", 0.001f, 2, 0.01f);
+    add("decay_s", "Decay s", 0.001f, 2, 0.1f); add("sustain", "Sustain", 0, 1, 0.7f); add("release_s", "Release s", 0.005f, 3, 0.2f);
+#endif
+    return layout;
+}
+
+class StarterDSP
+{
+public:
+    explicit StarterDSP(juce::AudioProcessorValueTreeState& state)
+    {
+#if FOURIER_STARTER == 1
+        a = state.getRawParameterValue("frequency_hz"); b = state.getRawParameterValue("q"); c = state.getRawParameterValue("eq_db"); d = state.getRawParameterValue("mode");
+#elif FOURIER_STARTER == 2
+        a = state.getRawParameterValue("threshold_db"); b = state.getRawParameterValue("ratio"); c = state.getRawParameterValue("attack_ms"); d = state.getRawParameterValue("release_ms"); e = state.getRawParameterValue("knee_db");
+#elif FOURIER_STARTER == 3
+        a = state.getRawParameterValue("drive_db"); b = state.getRawParameterValue("mix");
+#elif FOURIER_STARTER == 4
+        a = state.getRawParameterValue("delay_ms"); b = state.getRawParameterValue("feedback"); c = state.getRawParameterValue("mix");
+#else
+        juce::ignoreUnused(state);
+#endif
+    }
+    void prepare(double sampleRate)
+    {
+        sr = sampleRate; reset();
+        smoothA.reset(sr, 0.02); smoothB.reset(sr, 0.02); smoothC.reset(sr, 0.02);
+        smoothA.setCurrentAndTargetValue(a ? a->load() : 0); smoothB.setCurrentAndTargetValue(b ? b->load() : 0); smoothC.setCurrentAndTargetValue(c ? c->load() : 0);
+#if FOURIER_STARTER == 4
+        delay.setSize(2, static_cast<int>(std::ceil(sr * 2)) + 2); delay.clear();
+#endif
+    }
+    void reset() { z1.fill(0); z2.fill(0); gain = 1; position = 0; delay.clear(); }
+    double tail() const
+    {
+#if FOURIER_STARTER == 4
+        return 2.0 * std::ceil(std::log(0.001) / std::log(0.95)); // Conservative maximum over all automation settings.
+#else
+        return 0.0;
+#endif
+    }
+    void process(juce::AudioBuffer<float>& buffer)
+    {
+#if FOURIER_STARTER >= 1 && FOURIER_STARTER <= 4
+        smoothA.setTargetValue(a->load()); smoothB.setTargetValue(b->load()); if (c) smoothC.setTargetValue(c->load());
+#if FOURIER_STARTER == 2
+        const auto attack = std::exp(-1.0 / (0.001 * c->load() * sr)), release = std::exp(-1.0 / (0.001 * d->load() * sr));
+#endif
+        for (int i = 0; i < buffer.getNumSamples(); ++i)
+        {
+            const double av = smoothA.getNextValue(), bv = smoothB.getNextValue(), cv = smoothC.getNextValue();
+#if FOURIER_STARTER == 1
+            const double omega = juce::MathConstants<double>::twoPi * juce::jlimit(20.0, sr * 0.45, av) / sr;
+            const double cs = std::cos(omega), sn = std::sin(omega), alpha = sn / (2 * bv), A = std::pow(10.0, cv / 40);
+            double b0, b1, b2, a0, a1, a2; const int mode = static_cast<int>(d->load());
+            if (mode == 2) { b0 = 1 + alpha * A; b1 = -2 * cs; b2 = 1 - alpha * A; a0 = 1 + alpha / A; a1 = -2 * cs; a2 = 1 - alpha / A; }
+            else { b0 = (1 + (mode == 1 ? cs : -cs)) / 2; b1 = (mode == 1 ? -2 : 2) * b0; b2 = b0; a0 = 1 + alpha; a1 = -2 * cs; a2 = 1 - alpha; }
+            for (int ch = 0; ch < buffer.getNumChannels(); ++ch) {
+                const double x = buffer.getSample(ch, i), y = b0 / a0 * x + z1[static_cast<size_t>(ch)];
+                z1[static_cast<size_t>(ch)] = b1 / a0 * x - a1 / a0 * y + z2[static_cast<size_t>(ch)]; z2[static_cast<size_t>(ch)] = b2 / a0 * x - a2 / a0 * y;
+                buffer.setSample(ch, i, static_cast<float>(y));
+            }
+#elif FOURIER_STARTER == 2
+            juce::ignoreUnused(cv); double peak = 0;
+            for (int ch = 0; ch < buffer.getNumChannels(); ++ch) peak = juce::jmax(peak, std::abs(static_cast<double>(buffer.getSample(ch, i))));
+            const double over = 20 * std::log10(juce::jmax(1.0e-12, peak)) - av, knee = e->load(), slope = 1.0 / bv - 1;
+            const double reduction = knee > 0 && over > -knee / 2 && over < knee / 2 ? slope * std::pow(over + knee / 2, 2) / (2 * knee) : slope * juce::jmax(0.0, over);
+            const double target = std::pow(10.0, reduction / 20), coeff = target < gain ? attack : release;
+            gain = target + coeff * (gain - target);
+            for (int ch = 0; ch < buffer.getNumChannels(); ++ch) buffer.setSample(ch, i, buffer.getSample(ch, i) * static_cast<float>(gain));
+#elif FOURIER_STARTER == 3
+            juce::ignoreUnused(cv); const double drive = std::pow(10.0, av / 20);
+            for (int ch = 0; ch < buffer.getNumChannels(); ++ch) { const double x = buffer.getSample(ch, i); buffer.setSample(ch, i, static_cast<float>((1 - bv) * x + bv * std::tanh(drive * x) / drive)); }
+#elif FOURIER_STARTER == 4
+            const double read = std::fmod(position - juce::jlimit(1.0, sr * 2, av * sr / 1000) + delay.getNumSamples(), delay.getNumSamples());
+            const int left = static_cast<int>(read), right = (left + 1) % delay.getNumSamples(); const double fraction = read - left;
+            for (int ch = 0; ch < buffer.getNumChannels(); ++ch) {
+                const double x = buffer.getSample(ch, i), wet = delay.getSample(ch, left) * (1 - fraction) + delay.getSample(ch, right) * fraction;
+                delay.setSample(ch, position, static_cast<float>(x + bv * wet)); buffer.setSample(ch, i, static_cast<float>((1 - cv) * x + cv * wet));
+            }
+            position = (position + 1) % delay.getNumSamples();
+#endif
+        }
+#else
+        juce::ignoreUnused(buffer);
+#endif
+    }
+private:
+    std::atomic<float>* a = nullptr; std::atomic<float>* b = nullptr; std::atomic<float>* c = nullptr; std::atomic<float>* d = nullptr; std::atomic<float>* e = nullptr;
+    double sr = 48000, gain = 1;
+    int position = 0;
+    std::array<double, 2> z1{}, z2{};
+    juce::AudioBuffer<float> delay;
+    juce::SmoothedValue<double> smoothA, smoothB, smoothC;
+};

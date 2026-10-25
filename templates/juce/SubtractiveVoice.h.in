@@ -1,0 +1,46 @@
+#pragma once
+#include <juce_audio_utils/juce_audio_utils.h>
+#include <cmath>
+
+class SubtractiveVoice final : public juce::SynthesiserVoice
+{
+public:
+    explicit SubtractiveVoice(juce::AudioProcessorValueTreeState& state)
+      : waveform(state.getRawParameterValue("waveform")), cutoff(state.getRawParameterValue("cutoff_hz")), attack(state.getRawParameterValue("attack_s")),
+        decay(state.getRawParameterValue("decay_s")), sustain(state.getRawParameterValue("sustain")), release(state.getRawParameterValue("release_s")) {}
+    bool canPlaySound(juce::SynthesiserSound* sound) override { return sound != nullptr; }
+    void setCurrentPlaybackSampleRate(double rate) override { juce::SynthesiserVoice::setCurrentPlaybackSampleRate(rate); if (rate > 0) { envelope.setSampleRate(rate); frequency.reset(rate, 0.01); } }
+    void startNote(int note, float velocity, juce::SynthesiserSound*, int wheel) override
+    {
+        baseHz = juce::MidiMessage::getMidiNoteInHertz(note); phase = 0; filtered = 0; level = velocity * 0.15f; envelope.reset(); updateEnvelope();
+        pitchWheelMoved(wheel); frequency.setCurrentAndTargetValue(frequency.getTargetValue()); envelope.noteOn();
+    }
+    void stopNote(float, bool tail) override { envelope.noteOff(); if (!tail) { envelope.reset(); filtered = 0; clearCurrentNote(); } }
+    void pitchWheelMoved(int wheel) override { frequency.setTargetValue(baseHz * std::pow(2.0, (wheel - 8192) / 8192.0 * 2.0 / 12.0)); }
+    void controllerMoved(int controller, int value) override { if (controller == 1) vibrato = value / 127.0; }
+    void renderNextBlock(juce::AudioBuffer<float>& buffer, int start, int count) override
+    {
+        updateEnvelope();
+        const double filter = 1 - std::exp(-juce::MathConstants<double>::twoPi * juce::jlimit(20.0, getSampleRate() * 0.45, static_cast<double>(cutoff->load())) / getSampleRate());
+        const int mode = static_cast<int>(waveform->load());
+        for (int i = start; i < start + count; ++i) {
+            const double increment = juce::jlimit(0.000001, 0.45, frequency.getNextValue() * std::pow(2.0, vibrato * std::sin(lfo) / 120.0) / getSampleRate());
+            double value = std::sin(juce::MathConstants<double>::twoPi * phase);
+            if (mode == 1) value = 2 * phase - 1 - blep(phase, increment);
+            else if (mode == 2) value = (phase < 0.5 ? 1 : -1) + blep(phase, increment) - blep(std::fmod(phase + 0.5, 1.0), increment);
+            filtered += filter * (value - filtered);
+            const auto output = static_cast<float>(filtered) * level * envelope.getNextSample();
+            for (int ch = 0; ch < buffer.getNumChannels(); ++ch) buffer.addSample(ch, i, output);
+            phase = std::fmod(phase + increment, 1.0); lfo = std::fmod(lfo + juce::MathConstants<double>::twoPi * 5 / getSampleRate(), juce::MathConstants<double>::twoPi);
+            if (!envelope.isActive()) { clearCurrentNote(); break; }
+        }
+    }
+private:
+    static double blep(double t, double dt) { if (t < dt) { t /= dt; return t + t - t * t - 1; } if (t > 1 - dt) { t = (t - 1) / dt; return t * t + t + t + 1; } return 0; }
+    void updateEnvelope() { envelope.setParameters({attack->load(), decay->load(), sustain->load(), release->load()}); }
+    std::atomic<float>* waveform; std::atomic<float>* cutoff; std::atomic<float>* attack; std::atomic<float>* decay; std::atomic<float>* sustain; std::atomic<float>* release;
+    juce::ADSR envelope;
+    juce::SmoothedValue<double> frequency;
+    double phase = 0, lfo = 0, baseHz = 440, filtered = 0, vibrato = 0;
+    float level = 0;
+};

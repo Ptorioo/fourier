@@ -1,0 +1,173 @@
+#include "PluginProcessor.h"
+#include <cmath>
+#if FOURIER_STARTER == 6
+#include "SubtractiveVoice.h"
+#endif
+
+#if JucePlugin_IsSynth
+namespace
+{
+class SineSound final : public juce::SynthesiserSound
+{
+public:
+    bool appliesToNote(int) override { return true; }
+    bool appliesToChannel(int) override { return true; }
+};
+
+class SineVoice final : public juce::SynthesiserVoice
+{
+public:
+    SineVoice() { envelope.setParameters({0.005f, 0.03f, 0.8f, 0.1f}); }
+    bool canPlaySound(juce::SynthesiserSound* sound) override
+    {
+        return dynamic_cast<SineSound*>(sound) != nullptr;
+    }
+    void setCurrentPlaybackSampleRate(double rate) override
+    {
+        juce::SynthesiserVoice::setCurrentPlaybackSampleRate(rate);
+        if (rate > 0.0)
+            envelope.setSampleRate(rate);
+    }
+    void startNote(int note, float velocity, juce::SynthesiserSound*, int) override
+    {
+        phase = 0.0;
+        increment = juce::MathConstants<double>::twoPi
+                  * juce::MidiMessage::getMidiNoteInHertz(note) / getSampleRate();
+        level = velocity * 0.15f;
+        envelope.noteOn();
+    }
+    void stopNote(float, bool allowTailOff) override
+    {
+        envelope.noteOff();
+        if (!allowTailOff)
+        {
+            envelope.reset();
+            clearCurrentNote();
+        }
+    }
+    void pitchWheelMoved(int) override {}
+    void controllerMoved(int, int) override {}
+    void renderNextBlock(juce::AudioBuffer<float>& buffer, int start, int count) override
+    {
+        for (int sample = start; sample < start + count; ++sample)
+        {
+            const auto value = static_cast<float>(std::sin(phase)) * level * envelope.getNextSample();
+            for (int channel = 0; channel < buffer.getNumChannels(); ++channel)
+                buffer.addSample(channel, sample, value);
+            phase = std::fmod(phase + increment, juce::MathConstants<double>::twoPi);
+            if (!envelope.isActive())
+            {
+                clearCurrentNote();
+                break;
+            }
+        }
+    }
+private:
+    juce::ADSR envelope;
+    double phase = 0.0, increment = 0.0;
+    float level = 0.0f;
+};
+}
+#endif
+
+PluginProcessor::PluginProcessor()
+    : AudioProcessor(BusesProperties()
+#if !JucePlugin_IsSynth
+          .withInput("Input", juce::AudioChannelSet::stereo(), true)
+#endif
+          .withOutput("Output", juce::AudioChannelSet::stereo(), true)),
+      parameters(*this, nullptr, "Parameters", starterParameters()), dsp(parameters)
+{
+    gainDb = parameters.getRawParameterValue("gain_db");
+#if JucePlugin_IsSynth
+    for (int voice = 0; voice < 8; ++voice)
+#if FOURIER_STARTER == 6
+        synth.addVoice(new SubtractiveVoice(parameters));
+#else
+        synth.addVoice(new SineVoice());
+#endif
+    synth.addSound(new SineSound());
+    synth.setNoteStealingEnabled(true);
+    synth.setMinimumRenderingSubdivisionSize(1, true);
+#endif
+}
+
+void PluginProcessor::prepareToPlay(double sampleRate, int)
+{
+    dsp.prepare(sampleRate);
+    gain.reset(sampleRate, 0.02);
+    gain.setCurrentAndTargetValue(juce::Decibels::decibelsToGain(gainDb->load()));
+#if JucePlugin_IsSynth
+    synth.setCurrentPlaybackSampleRate(sampleRate);
+#endif
+}
+
+void PluginProcessor::releaseResources()
+{
+#if JucePlugin_IsSynth
+    synth.allNotesOff(0, false);
+#endif
+}
+
+void PluginProcessor::reset()
+{
+    dsp.reset();
+    gain.setCurrentAndTargetValue(juce::Decibels::decibelsToGain(gainDb->load()));
+#if JucePlugin_IsSynth
+    synth.allNotesOff(0, false);
+#endif
+}
+
+bool PluginProcessor::isBusesLayoutSupported(const BusesLayout& layouts) const
+{
+    const auto output = layouts.getMainOutputChannelSet();
+    if (output != juce::AudioChannelSet::mono() && output != juce::AudioChannelSet::stereo())
+        return false;
+#if JucePlugin_IsSynth
+    return layouts.getMainInputChannelSet().isDisabled();
+#else
+    return layouts.getMainInputChannelSet() == output;
+#endif
+}
+
+void PluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
+{
+    juce::ScopedNoDenormals noDenormals;
+#if JucePlugin_IsSynth
+    buffer.clear();
+    synth.renderNextBlock(buffer, midi, 0, buffer.getNumSamples());
+#else
+    juce::ignoreUnused(midi);
+    dsp.process(buffer);
+#endif
+    gain.setTargetValue(juce::Decibels::decibelsToGain(gainDb->load()));
+    for (int sample = 0; sample < buffer.getNumSamples(); ++sample)
+    {
+        const auto value = gain.getNextValue();
+        for (int channel = 0; channel < buffer.getNumChannels(); ++channel)
+            buffer.getWritePointer(channel)[sample] *= value;
+    }
+}
+
+juce::AudioProcessorEditor* PluginProcessor::createEditor()
+{
+    return new juce::GenericAudioProcessorEditor(*this);
+}
+
+void PluginProcessor::getStateInformation(juce::MemoryBlock& destination)
+{
+    if (auto xml = parameters.copyState().createXml())
+        copyXmlToBinary(*xml, destination);
+}
+
+void PluginProcessor::setStateInformation(const void* data, int size)
+{
+    if (auto xml = getXmlFromBinary(data, size))
+        if (xml->hasTagName(parameters.state.getType()))
+            parameters.replaceState(juce::ValueTree::fromXml(*xml));
+}
+
+juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()
+{
+    return new PluginProcessor();
+}

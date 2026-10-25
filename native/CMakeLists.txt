@@ -1,0 +1,20 @@
+cmake_minimum_required(VERSION 3.22)
+project(FourierHost VERSION 0.1.0 LANGUAGES C CXX)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+if(NOT EXISTS "${FOURIER_JUCE_PATH}/CMakeLists.txt")
+    message(FATAL_ERROR "Set FOURIER_JUCE_PATH to a trusted local JUCE source checkout")
+endif()
+add_subdirectory("${FOURIER_JUCE_PATH}" "${CMAKE_BINARY_DIR}/JUCE")
+juce_add_console_app(fourier-host PRODUCT_NAME "fourier-host")
+target_sources(fourier-host PRIVATE main.cpp)
+target_compile_features(fourier-host PRIVATE cxx_std_17)
+target_compile_definitions(fourier-host PRIVATE
+    JUCE_PLUGINHOST_VST3=1 JUCE_PLUGINHOST_AU=$<BOOL:${APPLE}>
+    JUCE_PLUGINHOST_VST=0 JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0
+    JUCE_REPORT_APP_USAGE=0)
+target_link_libraries(fourier-host PRIVATE juce::juce_audio_utils juce::juce_recommended_config_flags)
+set_target_properties(fourier-host PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+foreach(config Debug Release RelWithDebInfo MinSizeRel)
+    string(TOUPPER "${config}" upper)
+    set_target_properties(fourier-host PROPERTIES RUNTIME_OUTPUT_DIRECTORY_${upper} "${CMAKE_BINARY_DIR}")
+endforeach()
