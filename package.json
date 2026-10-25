@@ -1,5 +1,5 @@
 {
-  "name": "pi-fourier",
+  "name": "@ptorioo/fourier",
   "version": "0.1.0",
   "description": "Reproducible audio plug-in analysis and local JUCE VST3 authoring for Pi, with optional REA MCP evidence.",
   "type": "module",

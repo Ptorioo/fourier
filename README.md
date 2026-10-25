@@ -1,6 +1,6 @@
 # Fourier — audio analysis and JUCE development for Pi
 
-A local Pi package for measuring **audio effects and MIDI generators**, and writing **JUCE VST3 effects and instruments**, with editable C++ projects, local builds, reproducible test signals and evidence-backed reports.
+`@ptorioo/fourier` is a local Pi package for measuring **audio effects and MIDI generators**, and writing **JUCE VST3 effects and instruments**, with editable C++ projects, local builds, reproducible test signals and evidence-backed reports.
 
 - Filesystem-only VST3/AU discovery and isolated parameter inspection.
 - Seeded silence, impulses, tones, noise, sweeps, independently gated/phase-controlled multitone and stereo probes, PCM WAV input and raw MIDI events.

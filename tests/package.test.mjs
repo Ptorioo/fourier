@@ -7,7 +7,9 @@ test('npm package includes TypeScript backend, native source, templates and both
   const packed = execFileSync(process.execPath, [process.env.npm_execpath, 'pack', '--dry-run', '--json', '--ignore-scripts'], {
     cwd: packageRoot, encoding: 'utf8', windowsHide: true, timeout: 60000,
   });
-  const files = new Set(JSON.parse(packed)[0].files.map(file => file.path));
+  const manifest = JSON.parse(packed)[0];
+  assert.equal(manifest.name, '@ptorioo/fourier');
+  const files = new Set(manifest.files.map(file => file.path));
   assert.ok(files.has('dist/cli.js'));
   assert.ok(files.has('dist/worker.js'));
   assert.ok(files.has('skills/audio-analysis/SKILL.md'));
