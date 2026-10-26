@@ -26,6 +26,7 @@ async function loadFourier() {
   }
   const tools = loaded.extensions[0].tools;
   assert.equal(tools.size, 15);
+  assert.deepEqual(tools.get('fourier_plan').definition.parameters.properties.preset.anyOf.map(option => option.const), ['effect', 'generator']);
   assert.ok(loaded.extensions[0].commands.has('fourier'));
   return (name, args, ctx = { cwd: packageRoot }) => tools.get(name).definition.execute('test', args, new AbortController().signal, undefined, ctx);
 }

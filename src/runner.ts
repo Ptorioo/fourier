@@ -34,8 +34,7 @@ export function validate(value: unknown): Plan {
   return out;
 }
 export function preset(plugin: string, kind = 'effect') {
-  if (!['effect', 'generator', 'eq'].includes(kind)) throw new Error('Preset must be effect, generator or eq');
-  if (kind === 'eq') return { schema_version: 1, plugin, sample_rate: 48000, channels: 2, duration: 2, buffer_size: 512, timeout_seconds: 30, parameters: {}, cases: [{ id: 'impulse', stimulus: { kind: 'impulse', at_seconds: .25, level_dbfs: -18 } }, { id: 'noise', stimulus: { kind: 'noise', noise_rms_dbfs: -30, seed: 1729 } }, ...[100, 1000, 10000].map(frequency_hz => ({ id: `tone_${frequency_hz}`, stimulus: { kind: 'tone', frequency_hz, level_dbfs: -24 } }))] };
+  if (!['effect', 'generator'].includes(kind)) throw new Error('Preset must be effect or generator');
   const cases = kind === 'generator' ? [[60, 64], [60, 100], [60, 127], [72, 100]].map(([note, vel]) => ({ id: `note${note}_velocity${vel}`, stimulus: { kind: 'midi', midi: [{ time: .1, data: [144, note, vel] }, { time: 2, data: [128, note, 0] }] } })) : [
     ...['silence', 'impulse', 'tone', 'noise', 'sweep', 'step_tone'].map(k => ({ id: k, stimulus: { kind: k } })),
     { id: 'resonance', stimulus: { kind: 'resonance', probe_dbfs: -66 } }, { id: 'competition', stimulus: { kind: 'resonance', probe_dbfs: -66, competitor_hz: 1400 } },

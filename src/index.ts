@@ -75,9 +75,9 @@ export default function fourier(pi: ExtensionAPI) {
   }));
   pi.registerTool(defineTool({
     name: 'fourier_plan', label: 'Create audio analysis plan',
-    description: 'Create and validate a non-overwriting experiment plan directly from tool arguments; no manual JSON editing or plug-in loads. Inspect first for exact parameter names. Native numeric values are normalized [0,1]; strings must exactly match formatted values. Built-in parameters retain physical units. Omit cases for preset stimuli, or supply controlled cases with per-case parameter overrides. Resonance supports a continuous quiet right-channel noise probe and gated left tones for linking/release tests. Multitone supports 1–32 independently gated/phased/routed components for competition, history, intermodulation and stereo tests; no normalization.',
+    description: 'Create and validate a non-overwriting experiment plan directly from tool arguments; no manual JSON editing or plug-in loads. Inspect first for exact parameter names. Native numeric values are normalized [0,1]; strings must exactly match formatted values. Built-in parameters retain physical units. Use preset effect for all audio effects (including EQ, dynamics, distortion and delay/reverb), or generator for MIDI instruments. Omit cases for preset stimuli, or supply controlled cases with per-case parameter overrides. Resonance supports a continuous quiet right-channel noise probe and gated left tones for linking/release tests. Multitone supports 1–32 independently gated/phased/routed components for competition, history, intermodulation and stereo tests; no normalization.',
     parameters: Type.Object({
-      plugin: Type.String(), preset: Type.Union([Type.Literal('effect'), Type.Literal('generator'), Type.Literal('eq')]), out_file: Type.String(),
+      plugin: Type.String(), preset: Type.Union([Type.Literal('effect'), Type.Literal('generator')]), out_file: Type.String(),
       plugin_name: Type.Optional(Type.String()), parameters: Type.Optional(parameters), ...controlFields, ...hostFields,
       sample_rate: Type.Optional(Type.Integer({ minimum: 8000, maximum: 192000 })), channels: Type.Optional(Type.Integer({ minimum: 1, maximum: 2 })),
       duration: Type.Optional(Type.Number({ minimum: 0.01, maximum: 30 })), buffer_size: Type.Optional(Type.Integer({ minimum: 16, maximum: 32768 })),
@@ -147,7 +147,7 @@ function registerEqTools(pi: ExtensionAPI) {
   }));
   pi.registerTool(defineTool({
     name: 'fourier_eq', label: 'Characterize EQ response',
-    description: 'Offline EQ magnitude/wrapped-phase curves and measured grid extrema from 1–16 verified impulse/noise archives. No plug-in loads, inferred topology or automatic alignment. Impulse uses raw FFT ratios; noise uses steady H1/coherence. Writes eq.json in a new directory. Use fourier_plan preset eq for reusable stimuli.',
+    description: 'Offline EQ magnitude/wrapped-phase curves and measured grid extrema from 1–16 verified impulse/noise archives. No plug-in loads, inferred topology or automatic alignment. Impulse uses raw FFT ratios; noise uses steady H1/coherence. Writes eq.json in a new directory. Use fourier_plan preset effect for reusable impulse/noise stimuli.',
     parameters: Type.Object({ run_directory: Type.String(), out_directory: Type.String(), case_ids: Type.Optional(Type.Array(Type.String(), { minItems: 1, maxItems: 16 })), frequencies_hz: Type.Optional(Type.Array(Type.Number({ minimum: 1 }), { minItems: 1, maxItems: 256 })), channel: Type.Optional(Type.Integer({ minimum: 0, maximum: 1 })), lag_samples: Type.Optional(Type.Integer()) }),
     execute: async (_id, p, signal, _update, ctx) => { const { run_directory, out_directory, ...options } = p; return invoke(['eq', '--run', run_directory, '--out', out_directory, '--options-stdin'], ctx.cwd, signal, options); },
   }));

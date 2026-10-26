@@ -13,6 +13,21 @@ import { verify } from '../dist/verify.js';
 import { runBackend } from '../scripts/bridge.mjs';
 const temporary = t => { const dir = mkdtempSync(join(tmpdir(), 'fourier-eq-')); t.after(() => rmSync(dir, { recursive: true, force: true })); return dir; };
 
+test('plans use effect or generator presets, not effect subtypes', async t => {
+  const effect = validate(preset('builtin:gain', 'effect'));
+  assert.deepEqual(effect.cases.map(c => c.id), ['silence', 'impulse', 'tone', 'noise', 'sweep', 'step_tone', 'resonance', 'competition']);
+  assert.deepEqual(validate(preset('builtin:gain')), effect);
+  const generator = validate(preset('builtin:synth', 'generator'));
+  assert.equal(generator.cases.length, 4);
+  assert.ok(generator.cases.every(c => c.stimulus.kind === 'midi'));
+  for (const kind of ['eq', 'compressor', 'delay', 'unknown']) assert.throws(() => preset('builtin:gain', kind), /Preset must be effect or generator/);
+  const dir = temporary(t), output = join(dir, 'rejected.json');
+  const rejected = await runBackend(['init', '--plugin', 'builtin:gain', '--preset', 'eq', '--out', output]);
+  assert.notEqual(rejected.code, 0);
+  assert.match(rejected.stdout, /Preset must be effect or generator/);
+  assert.equal(existsSync(output), false);
+});
+
 test('host selection fails closed and doctor reports incompatible/missing helpers', async t => {
   const dir = temporary(t), missing = join(dir, 'missing.exe');
   assert.throws(() => nativeHost(missing), /Native host not found/);
@@ -27,18 +42,18 @@ test('host selection fails closed and doctor reports incompatible/missing helper
   assert.equal(validate({ ...preset('builtin:gain'), native_host: missing }).native_host, missing);
 });
 
-test('EQ preset, verified response curves and declarative assertions work without native code', async t => {
+test('effect preset supports verified EQ curves and declarative assertions without native code', async t => {
   const dir = temporary(t), spec = join(dir, 'plan.json'), output = join(dir, 'run');
-  dump(spec, { ...preset('builtin:gain', 'eq'), duration: .5, channels: 1, parameters: { gain_db: 6 } });
+  dump(spec, { ...preset('builtin:gain', 'effect'), duration: .5, parameters: { gain_db: 6 } });
   assert.equal((await run(spec, output)).status, 'ok');
   const eq = characterizeEq(output, join(dir, 'eq'), { case_ids: ['impulse'], frequencies_hz: [100, 1000, 10000] });
   const curve = load(eq.report).cases[0].points;
   for (const p of curve) { assert.ok(Math.abs(p.gain_db - 6) < 1e-5); assert.ok(Math.abs(p.phase_degrees) < 1e-5); }
-  const checks = [{ case_id: 'impulse', metric: 'eq_gain_db', frequency_hz: 1000, min: 5.99, max: 6.01 }, { case_id: 'tone_1000', metric: 'tone_gain_db', min: 5.99, max: 6.01 }, { case_id: 'impulse', metric: 'candidate_relative_error_db', max: -120 }];
+  const checks = [{ case_id: 'impulse', metric: 'eq_gain_db', frequency_hz: 1000, min: 5.99, max: 6.01 }, { case_id: 'tone', metric: 'tone_gain_db', min: 5.99, max: 6.01 }, { case_id: 'impulse', metric: 'candidate_relative_error_db', max: -120 }];
   assert.equal(verify(output, join(dir, 'pass'), { checks, candidate_run: output }).passed, true);
-  assert.equal(verify(output, join(dir, 'fail'), { checks: [{ case_id: 'tone_1000', metric: 'tone_gain_db', max: 1 }] }).status, 'error');
+  assert.equal(verify(output, join(dir, 'fail'), { checks: [{ case_id: 'tone', metric: 'tone_gain_db', max: 1 }] }).status, 'error');
   assert.throws(() => verify(output, join(dir, 'bad'), { checks: [{ case_id: 'impulse', metric: 'eq_gain_db', min: 0 }] }), /frequency_hz/);
-  assert.throws(() => eqResponse(output, 'tone_1000'), /impulse or continuous noise/);
+  assert.throws(() => eqResponse(output, 'tone'), /impulse or continuous noise/);
   const options = join(dir, 'checks.json'); dump(options, { checks });
   const cli = await runBackend(['verify', '--run', output, '--out', join(dir, 'cli-fail'), '--options', options]);
   assert.notEqual(cli.code, 0); // Missing explicit candidate_run is an error, never an implicit self-comparison.

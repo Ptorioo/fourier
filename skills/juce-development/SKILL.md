@@ -9,8 +9,8 @@ description: >-
 # Fourier: JUCE plug-in development
 
 Use for creating or editing JUCE effects/instruments, not only inspecting existing
-plug-ins. Read the package [README](../../README.md#write-vst3-plug-ins-with-juce)
-and the generated project's README. Use the installed JUCE version's
+plug-ins. Read the “Write VST3 plug-ins with JUCE” section of the package
+[README](../../README.md) and the generated project's README. Use the installed JUCE version's
 `docs/CMake API.md`, module headers and examples for version-specific APIs.
 
 ## Backend and host setup
@@ -85,8 +85,9 @@ calibration and PCM WAV analysis work without the helper.
    name, index and normalized `raw_value` are recorded for verification. Only
    writable/automatable controls are listed, not read-only MIDI controller proxies.
    Built-ins such as `builtin:gain` instead keep physical `gain_db` values.
-   Create a fresh `fourier_plan` with `preset:"effect"`, `preset:"generator"` or `preset:"eq"`
-   and run it in a new directory. Old Pedalboard plans are not native JUCE plans. Loading this build executes native code. Start with silence,
+   Create a fresh `fourier_plan` with `preset:"effect"` for any audio effect
+   (including EQ/filter, compressor, saturation and delay/reverb), or
+   `preset:"generator"` for a MIDI instrument, and run it in a new directory. Old Pedalboard plans are not native JUCE plans. Loading this build executes native code. Start with silence,
    known gains, impulses and seeded signals. Instruments need empty-MIDI, note-on,
    note-off/release and polyphony cases. Use `fourier_compare` on known/held-out
    inputs; don't call an unaligned null test or one matching curve proof of a clone.

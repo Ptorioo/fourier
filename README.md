@@ -50,7 +50,7 @@ plan JSON, or repeated `fourier.mjs` argument lists are needed. For example:
 
 ```javascript
 fourier_doctor({})
-fourier_plan({ plugin: 'builtin:gain', preset: 'eq', out_file: 'runs/eq-plan.json' })
+fourier_plan({ plugin: 'builtin:gain', preset: 'effect', out_file: 'runs/eq-plan.json' })
 fourier_run({ spec_path: 'runs/eq-plan.json', out_directory: 'runs/eq' })
 fourier_eq({ run_directory: 'runs/eq', out_directory: 'runs/eq-response' })
 ```
@@ -177,7 +177,7 @@ long builds can use the Pi tool or the generated README's direct CMake commands.
 
 ### Investigate through tools, without editing JSON
 
-`fourier_plan` accepts the plan's `parameters`, `cases`, `sample_rate`, `channels`, `duration`, `buffer_size`, `timeout_seconds` and optional `plugin_name` directly. Case parameters override global parameters. Inspect a real plug-in first; controls below belong to the analytical built-in only.
+`fourier_plan` uses `preset: 'effect'` for all audio effects (EQ/filter, dynamics, distortion, delay/reverb, etc.) and `preset: 'generator'` for MIDI instruments. There are no separate effect-type presets. It accepts the plan's `parameters`, `cases`, `sample_rate`, `channels`, `duration`, `buffer_size`, `timeout_seconds` and optional `plugin_name` directly. Case parameters override global parameters. Inspect a real plug-in first; controls below belong to the analytical built-in only.
 
 ```js
 fourier_plan({
@@ -214,7 +214,7 @@ The CLI also accepts JSON options through `--options FILE` or bounded `--options
 
 ```js
 fourier_plan({
-  plugin: 'builtin:gain', preset: 'eq', out_file: 'runs/eq-plan.json',
+  plugin: 'builtin:gain', preset: 'effect', out_file: 'runs/eq-plan.json',
   parameters: { gain_db: 6 }
 })
 fourier_run({ spec_path: 'runs/eq-plan.json', out_directory: 'runs/eq' })
@@ -225,16 +225,16 @@ fourier_eq({
 fourier_verify({
   run_directory: 'runs/eq', out_directory: 'runs/eq-checks', checks: [
     { case_id: 'impulse', metric: 'eq_gain_db', frequency_hz: 1000, min: 5.99, max: 6.01 },
-    { case_id: 'tone_1000', metric: 'tone_gain_db', min: 5.99, max: 6.01 }
+    { case_id: 'tone', metric: 'tone_gain_db', min: 5.99, max: 6.01 }
   ]
 })
 ```
 
-The `eq` preset generates a delayed impulse, seeded continuous noise and 100/1,000/10,000 Hz tones. `fourier_eq` analyzes 1–16 selected cases and 1–256 frequencies (default 128 logarithmic points), one channel per call. It verifies archives and reports actual FFT bins, gain, wrapped phase, available noise coherence and grid extrema in `eq.json`. Impulse response uses an unwindowed complex FFT ratio; noise H1 uses the final 75% of the recording. Automated cases are rejected. Allow sufficient settling/decay and control level dependence; these are descriptive curves, not automatic center-frequency/Q, bandwidth, group delay or unique topology recovery.
+The `effect` preset supplies `silence`, `impulse`, `tone` (1,000 Hz), seeded continuous `noise`, `sweep`, `step_tone`, `resonance` and `competition` cases for EQ and other effects. Use explicit cases for additional frequencies, levels or timing. The former `eq` preset value is no longer accepted; use `effect` when creating new plans. Existing plan JSON remains valid because it stores explicit cases, not a preset value. `fourier_eq` analyzes 1–16 selected cases and 1–256 frequencies (default 128 logarithmic points), one channel per call. It verifies archives and reports actual FFT bins, gain, wrapped phase, available noise coherence and grid extrema in `eq.json`. Impulse response uses an unwindowed complex FFT ratio; noise H1 uses the final 75% of the recording. Automated cases are rejected. Allow sufficient settling/decay and control level dependence; these are descriptive curves, not automatic center-frequency/Q, bandwidth, group delay or unique topology recovery.
 
 `fourier_verify` writes `verification.json` for 1–128 checks; each needs `case_id`, `metric`, and inclusive `min` and/or `max`, with optional zero-based `channel` (default 0). Metrics: `tone_gain_db`, `peak_dbfs`, `rms_dbfs`, `dc`, `full_scale_fraction`, `reported_latency_samples`, `impulse_peak_lag_samples`, `eq_gain_db`, `eq_phase_degrees`, `candidate_relative_error_db`. EQ checks require `frequency_hz`; tone checks require a continuous tone and use the final up-to-one-second window. Levels/DC/fractions use the full output. Missing/unexcited metrics fail, never pass by omission. Candidate error requires explicit `candidate_run` with exactly matching inputs; an exact null is marked `exact_null: true`, while a silent reference has undefined relative error. CLI failures exit nonzero and Pi reports an error with the evidence path. Only explicit `lag_samples`/`candidate_lag_samples` are applied; no inferred alignment, normalization or phase unwrapping.
 
-CLI: `init --preset eq`, `eq --run RUN --out NEW --options FILE` and `verify --run RUN --out NEW --options FILE` (or `--options-stdin`). Outputs never overwrite existing evidence.
+CLI: `init --preset effect`, `eq --run RUN --out NEW --options FILE` and `verify --run RUN --out NEW --options FILE` (or `--options-stdin`). Outputs never overwrite existing evidence.
 
 ### Bounded EQ model and control identification
 
