@@ -3,6 +3,7 @@
 #define FOURIER_STARTER @DSP_ID@
 #endif
 #include <juce_audio_utils/juce_audio_utils.h>
+#include <juce_dsp/juce_dsp.h>
 #include <array>
 #include <cmath>
 
@@ -26,6 +27,21 @@ inline juce::AudioProcessorValueTreeState::ParameterLayout starterParameters()
     add("drive_db", "Drive dB", 0, 36, 6); add("mix", "Wet mix", 0, 1, 1);
 #elif FOURIER_STARTER == 4
     add("delay_ms", "Delay ms", 1, 2000, 250); add("feedback", "Feedback", 0, 0.95f, 0.3f); add("mix", "Wet mix", 0, 1, 0.5f);
+#elif FOURIER_STARTER == 7
+    add("room_size", "Room size", 0, 0.95f, 0.5f); add("damping", "Damping", 0, 0.95f, 0.5f);
+    add("mix", "Wet mix", 0, 1, 0.3f); add("width", "Stereo width", 0, 1, 1);
+#elif FOURIER_STARTER == 8 || FOURIER_STARTER == 9 || FOURIER_STARTER == 11
+    add("rate_hz", "Rate Hz", 0.01f, 10, 0.5f); add("depth", "Depth", 0, 1, 0.5f);
+    add("feedback", "Feedback", -0.95f, 0.95f, FOURIER_STARTER == 9 ? 0.7f : 0.0f); add("mix", "Wet mix", 0, 1, 0.5f);
+#if FOURIER_STARTER == 8
+    add("centre_hz", "Centre Hz", 20, 10000, 1000);
+#else
+    add("delay_ms", "Centre delay ms", 1, 100, FOURIER_STARTER == 9 ? 2.0f : 12.0f);
+#endif
+#elif FOURIER_STARTER == 10
+    add("ceiling_db", "Ceiling dB", -24, 0, -1); add("release_ms", "Release ms", 5, 2000, 100);
+#elif FOURIER_STARTER == 12
+    add("rate_hz", "Rate Hz", 0.01f, 20, 4); add("depth", "Depth", 0, 1, 0.5f);
 #elif FOURIER_STARTER == 6
     layout.add(std::make_unique<juce::AudioParameterChoice>(juce::ParameterID{"waveform", 1}, "Waveform", juce::StringArray{"Sine", "Saw", "Square"}, 1));
     add("cutoff_hz", "Cutoff Hz", 20, 20000, 3000); add("attack_s", "Attack s", 0.001f, 2, 0.01f);
@@ -47,31 +63,73 @@ public:
         a = state.getRawParameterValue("drive_db"); b = state.getRawParameterValue("mix");
 #elif FOURIER_STARTER == 4
         a = state.getRawParameterValue("delay_ms"); b = state.getRawParameterValue("feedback"); c = state.getRawParameterValue("mix");
+#elif FOURIER_STARTER == 7
+        a = state.getRawParameterValue("room_size"); b = state.getRawParameterValue("damping"); c = state.getRawParameterValue("mix"); d = state.getRawParameterValue("width");
+#elif FOURIER_STARTER == 8 || FOURIER_STARTER == 9 || FOURIER_STARTER == 11
+        a = state.getRawParameterValue("rate_hz"); b = state.getRawParameterValue("depth"); c = state.getRawParameterValue("feedback"); d = state.getRawParameterValue("mix");
+        e = state.getRawParameterValue(FOURIER_STARTER == 8 ? "centre_hz" : "delay_ms");
+#elif FOURIER_STARTER == 10
+        a = state.getRawParameterValue("ceiling_db"); b = state.getRawParameterValue("release_ms");
+#elif FOURIER_STARTER == 12
+        a = state.getRawParameterValue("rate_hz"); b = state.getRawParameterValue("depth");
 #else
         juce::ignoreUnused(state);
 #endif
     }
-    void prepare(double sampleRate)
+    void prepare(double sampleRate, int maximumBlockSize, int channels)
     {
-        sr = sampleRate; reset();
+        sr = sampleRate;
+        juce::ignoreUnused(maximumBlockSize, channels);
         smoothA.reset(sr, 0.02); smoothB.reset(sr, 0.02); smoothC.reset(sr, 0.02);
         smoothA.setCurrentAndTargetValue(a ? a->load() : 0); smoothB.setCurrentAndTargetValue(b ? b->load() : 0); smoothC.setCurrentAndTargetValue(c ? c->load() : 0);
 #if FOURIER_STARTER == 4
-        delay.setSize(2, static_cast<int>(std::ceil(sr * 2)) + 2); delay.clear();
+        delay.setSize(2, static_cast<int>(std::ceil(sr * 2)) + 2);
+#elif FOURIER_STARTER == 7
+        reverb.setSampleRate(sr);
+#elif FOURIER_STARTER == 8 || FOURIER_STARTER == 9 || FOURIER_STARTER == 11
+        modulation.prepare({sr, static_cast<juce::uint32>(maximumBlockSize), static_cast<juce::uint32>(channels)});
+#endif
+        reset();
+    }
+    void reset()
+    {
+        z1.fill(0); z2.fill(0); gain = 1; position = 0; phase = 0; delay.clear();
+#if FOURIER_STARTER == 7
+        reverb.reset();
+#elif FOURIER_STARTER == 8 || FOURIER_STARTER == 9 || FOURIER_STARTER == 11
+        modulation.reset();
 #endif
     }
-    void reset() { z1.fill(0); z2.fill(0); gain = 1; position = 0; delay.clear(); }
     double tail() const
     {
 #if FOURIER_STARTER == 4
         return 2.0 * std::ceil(std::log(0.001) / std::log(0.95)); // Conservative maximum over all automation settings.
+#elif FOURIER_STARTER == 7 || FOURIER_STARTER == 8
+        return 30.0;
+#elif FOURIER_STARTER == 9 || FOURIER_STARTER == 11
+        return 15.0;
 #else
         return 0.0;
 #endif
     }
     void process(juce::AudioBuffer<float>& buffer)
     {
-#if FOURIER_STARTER >= 1 && FOURIER_STARTER <= 4
+#if FOURIER_STARTER == 7
+        juce::Reverb::Parameters p;
+        p.roomSize = a->load(); p.damping = b->load(); p.wetLevel = c->load() / 3.0f; p.dryLevel = (1 - c->load()) / 2.0f; p.width = d->load();
+        reverb.setParameters(p);
+        if (buffer.getNumChannels() == 1) reverb.processMono(buffer.getWritePointer(0), buffer.getNumSamples());
+        else reverb.processStereo(buffer.getWritePointer(0), buffer.getWritePointer(1), buffer.getNumSamples());
+#elif FOURIER_STARTER == 8 || FOURIER_STARTER == 9 || FOURIER_STARTER == 11
+        modulation.setRate(a->load()); modulation.setDepth(b->load()); modulation.setFeedback(c->load()); modulation.setMix(d->load());
+#if FOURIER_STARTER == 8
+        modulation.setCentreFrequency(juce::jmin(e->load(), static_cast<float>(sr * 0.45)));
+#else
+        modulation.setCentreDelay(e->load());
+#endif
+        juce::dsp::AudioBlock<float> block(buffer);
+        modulation.process(juce::dsp::ProcessContextReplacing<float>(block));
+#elif (FOURIER_STARTER >= 1 && FOURIER_STARTER <= 4) || FOURIER_STARTER == 10 || FOURIER_STARTER == 12
         smoothA.setTargetValue(a->load()); smoothB.setTargetValue(b->load()); if (c) smoothC.setTargetValue(c->load());
 #if FOURIER_STARTER == 2
         const auto attack = std::exp(-1.0 / (0.001 * c->load() * sr)), release = std::exp(-1.0 / (0.001 * d->load() * sr));
@@ -109,6 +167,17 @@ public:
                 delay.setSample(ch, position, static_cast<float>(x + bv * wet)); buffer.setSample(ch, i, static_cast<float>((1 - cv) * x + cv * wet));
             }
             position = (position + 1) % delay.getNumSamples();
+#elif FOURIER_STARTER == 10
+            juce::ignoreUnused(cv); double peak = 0;
+            for (int ch = 0; ch < buffer.getNumChannels(); ++ch) peak = juce::jmax(peak, std::abs(static_cast<double>(buffer.getSample(ch, i))));
+            const double ceiling = std::pow(10.0, av / 20), target = peak > ceiling ? ceiling / peak : 1.0;
+            const double release = std::exp(-1.0 / (0.001 * bv * sr));
+            gain = target < gain ? target : target + release * (gain - target);
+            for (int ch = 0; ch < buffer.getNumChannels(); ++ch) buffer.setSample(ch, i, buffer.getSample(ch, i) * static_cast<float>(gain));
+#elif FOURIER_STARTER == 12
+            juce::ignoreUnused(cv); const float level = static_cast<float>(1 - bv * (0.5 + 0.5 * std::sin(phase)));
+            phase = std::fmod(phase + juce::MathConstants<double>::twoPi * av / sr, juce::MathConstants<double>::twoPi);
+            for (int ch = 0; ch < buffer.getNumChannels(); ++ch) buffer.setSample(ch, i, buffer.getSample(ch, i) * level);
 #endif
         }
 #else
@@ -117,9 +186,16 @@ public:
     }
 private:
     std::atomic<float>* a = nullptr; std::atomic<float>* b = nullptr; std::atomic<float>* c = nullptr; std::atomic<float>* d = nullptr; std::atomic<float>* e = nullptr;
-    double sr = 48000, gain = 1;
+    double sr = 48000, gain = 1, phase = 0;
     int position = 0;
     std::array<double, 2> z1{}, z2{};
     juce::AudioBuffer<float> delay;
+#if FOURIER_STARTER == 7
+    juce::Reverb reverb;
+#elif FOURIER_STARTER == 8
+    juce::dsp::Phaser<float> modulation;
+#elif FOURIER_STARTER == 9 || FOURIER_STARTER == 11
+    juce::dsp::Chorus<float> modulation;
+#endif
     juce::SmoothedValue<double> smoothA, smoothB, smoothC;
 };

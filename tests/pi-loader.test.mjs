@@ -26,6 +26,8 @@ async function loadFourier() {
   }
   const tools = loaded.extensions[0].tools;
   assert.equal(tools.size, 15);
+  assert.equal(tools.has('fourier_eq'), false);
+  assert.equal(tools.has('fourier_eq_identify'), false);
   assert.deepEqual(tools.get('fourier_plan').definition.parameters.properties.preset.anyOf.map(option => option.const), ['effect', 'generator']);
   assert.ok(loaded.extensions[0].commands.has('fourier'));
   return (name, args, ctx = { cwd: packageRoot }) => tools.get(name).definition.execute('test', args, new AbortController().signal, undefined, ctx);
@@ -50,15 +52,21 @@ test('actual Pi loader registers and executes Fourier tools', { skip: !required 
     await writeFile(checkpoint, original);
     const unavailable = await invoke('fourier_doctor', { native_host: join(directory, 'missing-helper') });
     assert.equal(JSON.parse(unavailable.content[0].text).plugins_ready, false);
-    const eq = JSON.parse((await invoke('fourier_eq', { run_directory: output, out_directory: join(directory, 'eq'), case_ids: ['impulse'], frequencies_hz: [1000] })).content[0].text);
-    assert.ok(Math.abs(eq.cases[0].maximum.gain_db) < .001);
+    const effects = JSON.parse((await invoke('fourier_effects', { effect: 'eq', run_directory: output, out_directory: join(directory, 'effects'), frequencies_hz: [1000] })).content[0].text);
+    assert.equal(effects.effect, 'eq');
+    const measured = JSON.parse(await readFile(effects.report, 'utf8'));
+    assert.ok(measured.cases.every(c => Math.abs(c.observation.points[0].gain_db) < .001));
+    const effectSuite = join(directory, 'effect-suite.json');
+    await invoke('fourier_effects_identify', { action: 'create', effect: 'saturation', plugin: 'builtin:clip', parameters: { threshold: .25 }, out_file: effectSuite, sample_rate: 8000, duration: .5 });
+    const effectFit = JSON.parse((await invoke('fourier_effects_identify', { action: 'run', suite: effectSuite, out_directory: join(directory, 'effect-fit') })).content[0].text);
+    assert.equal(effectFit.model.family, 'hard_clip');
     const checks = [{ case_id: 'tone', metric: 'tone_gain_db', min: -.001, max: .001 }];
     const checked = await invoke('fourier_verify', { run_directory: output, out_directory: join(directory, 'verified'), checks });
     assert.equal(JSON.parse(checked.content[0].text).passed, true);
     await assert.rejects(invoke('fourier_verify', { run_directory: output, out_directory: join(directory, 'failed'), checks: [{ case_id: 'tone', metric: 'tone_gain_db', min: 3 }] }), /verification.json/);
     const identificationSuite = join(directory, 'eq-identification.json');
-    await invoke('fourier_eq_identify', { action: 'create', plugin: 'builtin:gain', out_file: identificationSuite, neutral_parameters: { gain_db: 0 }, bands: [{ id: 'test', parameters: { gain_db: 6 } }], duration: .5, channels: 1, families: ['bell'], stages: [1] });
-    const identified = await invoke('fourier_eq_identify', { action: 'run', suite: identificationSuite, out_directory: join(directory, 'identified') });
+    await invoke('fourier_effects_identify', { action: 'create', effect: 'eq', plugin: 'builtin:gain', out_file: identificationSuite, neutral_parameters: { gain_db: 0 }, bands: [{ id: 'test', parameters: { gain_db: 6 } }], duration: .5, channels: 1, families: ['bell'], stages: [1] });
+    const identified = await invoke('fourier_effects_identify', { action: 'run', suite: identificationSuite, out_directory: join(directory, 'identified') });
     assert.equal(JSON.parse(identified.content[0].text).fits, 1);
     const controlled = join(directory, 'controlled.json');
     await invoke('fourier_plan', {

@@ -9,13 +9,13 @@ import { dump, load } from '../dist/io.js';
 import { run, validate } from '../dist/runner.js';
 import { match } from '../dist/match.js';
 import { characterize, decayCurve } from '../dist/characterize.js';
-import { create } from '../dist/juce.js';
+import { create, dspVariants } from '../dist/juce.js';
 import { snapshot } from '../dist/controls.js';
 
 function temp(fn) { const dir = mkdtempSync(join(tmpdir(), 'fourier-match-')); return Promise.resolve().then(() => fn(dir)).finally(() => rmSync(dir, { recursive: true, force: true })); }
 test('all DSP choices generate complete projects and reject kind mismatches', () => temp(dir => {
-  for (const [id, dsp] of ['gain', 'filter', 'compressor', 'saturation', 'delay', 'sine', 'subtractive'].entries()) {
-    const project = join(dir, dsp), kind = id < 5 ? 'effect' : 'instrument';
+  for (const [id, dsp] of dspVariants.entries()) {
+    const project = join(dir, dsp), kind = ['sine', 'subtractive'].includes(dsp) ? 'instrument' : 'effect';
     assert.equal(create(project, 'Starter', kind, 'Test', 'Strt', dsp).dsp, dsp);
     assert.match(readFileSync(join(project, 'StarterDSP.h'), 'utf8'), new RegExp(`#define FOURIER_STARTER ${id}`));
     assert.ok(!readFileSync(join(project, 'README.md'), 'utf8').includes('@DSP@'));

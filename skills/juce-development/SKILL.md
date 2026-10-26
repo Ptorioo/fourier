@@ -35,7 +35,8 @@ calibration and PCM WAV analysis work without the helper.
 
 1. Establish effect versus MIDI instrument, the actual DSP behavior, parameters,
    intended project directory and local JUCE checkout. Select a small `dsp` starter:
-   gain/filter/compressor/saturation/delay effects or sine/subtractive instruments.
+   gain/filter-EQ/compressor/saturation/delay/reverb/phaser/flanger/limiter/chorus/
+   tremolo effects or sine/subtractive instruments.
    Defaults remain gain/sine, not an assumed reconstruction of a vendor effect.
    Missing DSP requirements need clarification, not a pile of speculative controls.
 2. Call `fourier_juce({action:"doctor", juce_path:"/absolute/path/to/JUCE"})`.
@@ -56,7 +57,12 @@ calibration and PCM WAV analysis work without the helper.
    gain and mono/stereo buses. The filter is one low/high-pass/peak RBJ biquad;
    compressor is stereo-linked peak/soft-knee with no lookahead/sidechain;
    saturation is tanh with no oversampling (aliasing); delay uses a preallocated
-   fractional read with pitch-changing time modulation. Instruments have eight
+   fractional read with pitch-changing time modulation. Reverb uses JUCE Freeverb,
+   phaser uses JUCE's six-stage algorithm, flanger/chorus use the same JUCE Chorus
+   with short/long centre-delay defaults (not through-zero or multi-voice stereo).
+   Limiter is linked sample-peak with instantaneous reduction/release smoothing,
+   not true-peak/lookahead; its gain is pre-limiter to preserve the sample ceiling.
+   Tremolo is shared-phase sine AM. Instruments have eight
    sample-timed voices, velocity, sustain and stealing. Subtractive adds sine/
    polyBLEP saw/square, one-pole non-resonant low-pass, ADSR, ±2-semitone pitch bend
    and CC1 vibrato; sine retains fixed ADSR/no bend. No MPE, production-quality
@@ -100,9 +106,13 @@ calibration and PCM WAV analysis work without the helper.
    suites with explicit candidate mappings; `fit` searches a bounded grid and
    scores held-out IDs only after choosing the winner. Use `fourier_characterize`
    for offline dynamics, coherent THD/selected IMD and impulse energy-decay fits.
-   Use `fourier_eq` for verified impulse/noise response curves, `fourier_verify`
-   for declarative regression bounds, and `fourier_eq_identify` for explicit
-   isolated-band RBJ-surrogate/control-law experiments. These tools replace
+   Use unified `fourier_effects` for verified responses including EQ/filter,
+   `fourier_verify` for declarative bounds, and `fourier_effects_identify` for
+   reusable model/control-law experiments. EQ/filter retain explicit neutral/band
+   isolation and phase-aware RBJ fitting. Other fits are static dynamics,
+   memoryless waveshapers, integer-feedback delay, RT60 decay or sinusoidal carrier
+   trajectories—not unique proprietary topology or reverb/modulation reconstruction.
+   These tools replace
    routine ad hoc report-parsing scripts, not independent reference validation.
    Read the audio-analysis skill/README for bounds and measurement caveats.
 

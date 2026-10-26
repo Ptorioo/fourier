@@ -9,7 +9,8 @@ import type { Case, Scalar, State } from './types.js';
 
 interface Experiment { id: string; band: string; parameter: string | null; value: Scalar | null; held_out: boolean }
 function design(raw: unknown) {
-  const o = fields(raw, ['plugin', 'plugin_name', 'native_host', 'neutral_parameters', 'bands', 'sample_rate', 'channels', 'duration', 'buffer_size', 'timeout_seconds', 'families', 'stages'], 'EQ identification design');
+  const o = fields(raw, ['effect', 'plugin', 'plugin_name', 'native_host', 'neutral_parameters', 'bands', 'sample_rate', 'channels', 'duration', 'buffer_size', 'timeout_seconds', 'families', 'stages'], 'EQ identification design');
+  if (o.effect !== 'eq' && o.effect !== 'filter') throw new Error('EQ effect must be eq or filter');
   if (typeof o.plugin !== 'string') throw new Error('Explicit plugin required');
   const neutral = params(o.neutral_parameters);
   if (!Object.keys(neutral).length) throw new Error('Explicit neutral_parameters required: disable/neutralize every band and wet/output controls');
@@ -42,10 +43,10 @@ function design(raw: unknown) {
   const families = o.families ?? [...eqFamilies], stages = o.stages ?? [1, 2];
   if (!Array.isArray(families) || !families.length || new Set(families).size !== families.length || families.some(f => !eqFamilies.includes(f))) throw new Error('families must select distinct supported RBJ families');
   if (!Array.isArray(stages) || !stages.length || stages.length > 4 || new Set(stages).size !== stages.length || stages.some(s => !Number.isInteger(s) || s < 1 || s > 4)) throw new Error('stages must select distinct integers 1..4');
-  const { bands: _bands, neutral_parameters: _neutral, families: _families, stages: _stages, ...settings } = o;
+  const { effect: _effect, bands: _bands, neutral_parameters: _neutral, families: _families, stages: _stages, ...settings } = o;
   const plan = validate({ ...settings, plugin: o.plugin, duration, parameters: neutral, cases });
   if (plan.duration * plan.sample_rate * plan.channels * cases.length * 8 > 512_000_000) throw new Error('EQ identification exceeds 512 MB raw archive budget');
-  return { plan, experiments, families: families as EqFamily[], stages: stages as number[] };
+  return { effect: o.effect, plan, experiments, families: families as EqFamily[], stages: stages as number[] };
 }
 function readSuite(path: string) {
   const value = fields(load(expand(path)), ['schema_version', 'design'], 'EQ identification suite');
@@ -108,8 +109,8 @@ function analyze(suitePath: string, directory: string, output: string, channel: 
     });
     return { band, parameter, topology_consistent: topologyConsistent, targets };
   });
-  mkdirSync(dirname(output), { recursive: true }); mkdirSync(output); const report = join(output, 'eq-identification.json');
-  dump(report, { status: 'ok', suite_sha256: sha(suitePath), run_sha256: sha(join(directory, 'run.json')), identity: state.identity, channel, baseline_parameters: baseline.source.result.plugin?.parameters ?? null, rows, mappings, limits: ['All bands except the isolated test band must be neutralized explicitly by the caller. This workflow does not discover unknown parameter names or secretly infer control roles.', 'Impulse at 250 ms allows settling, but long smoothing, nonlinearities, changing latency or an insufficient decay tail can invalidate a static fit. Validate with independent renders and levels.', 'Models select the best tested surrogate, not uniquely recovered proprietary topology. Mapping laws are local hypotheses over sampled numeric controls; strings retain lookup samples. Flat responses do not identify frequency/Q. Total cascaded bell/shelf gain is reported for mappings.', 'Every fourth frequency is held out of model optimization. Explicit/default held-out control values are excluded from mapping-law fitting; no held-out values means no mapping validation.'] });
+  mkdirSync(dirname(output), { recursive: true }); mkdirSync(output); const report = join(output, 'effects-identification.json');
+  dump(report, { status: 'ok', effect: suite.effect, suite_sha256: sha(suitePath), run_sha256: sha(join(directory, 'run.json')), identity: state.identity, channel, baseline_parameters: baseline.source.result.plugin?.parameters ?? null, rows, mappings, limits: ['All bands except the isolated test band must be neutralized explicitly by the caller. This workflow does not discover unknown parameter names or secretly infer control roles.', 'Impulse at 250 ms allows settling, but long smoothing, nonlinearities, changing latency or an insufficient decay tail can invalidate a static fit. Validate with independent renders and levels.', 'Models select the best tested surrogate, not uniquely recovered proprietary topology. Mapping laws are local hypotheses over sampled numeric controls; strings retain lookup samples. Flat responses do not identify frequency/Q. Total cascaded bell/shelf gain is reported for mappings.', 'Every fourth frequency is held out of model optimization. Explicit/default held-out control values are excluded from mapping-law fitting; no held-out values means no mapping validation.'] });
   const models = rows.filter(r => r.parameter === null).map(r => ({ band: r.band, ...r.fit.best.model, accepted: r.fit.accepted, ambiguous: r.fit.ambiguous, ...r.fit.best.held_out }));
   const lines = ['# Measured EQ surrogate identification', '', 'Best tested models — not proof of the original internal implementation.', '', '| Band | Family | Stages | Frequency Hz | Q | Section gain dB | Held-out magnitude RMSE dB | Held-out phase RMSE ° | Accepted | Ambiguous |', '|---|---|---:|---:|---:|---:|---:|---:|---|---|', ...models.map(m => `| ${m.band} | ${m.family} | ${m.stages} | ${m.frequency_hz.toFixed(3)} | ${m.q.toFixed(4)} | ${m.gain_db.toFixed(3)} | ${m.magnitude_rmse_db.toFixed(5)} | ${m.phase_rmse_degrees.toFixed(4)} | ${m.accepted} | ${m.ambiguous} |`), '', '## Control mapping hypotheses', 'Numeric laws are fitted on training values only. Unchanged/unidentifiable targets have no law; string controls retain lookup samples. Consult JSON for every sample, alternative and residual.'];
   for (const mapping of mappings) {
@@ -120,18 +121,18 @@ function analyze(suitePath: string, directory: string, output: string, channel: 
     }
   }
   lines.push('', 'Limits: explicit band isolation is required; 250 ms settling may be insufficient; fits are bounded RBJ hypotheses, not unique topology recovery. Held-out frequencies are not an independent render. Local laws must not be extrapolated.');
-  writeFileSync(join(output, 'EQ_IDENTIFICATION.md'), lines.join('\n') + '\n', { flag: 'wx' });
-  return { status: 'ok', directory: output, report, fits: rows.length, accepted: rows.filter(r => r.fit.accepted).length, ambiguous: rows.filter(r => r.fit.ambiguous).length, mappings: mappings.length, models };
+  writeFileSync(join(output, 'EFFECTS_IDENTIFICATION.md'), lines.join('\n') + '\n', { flag: 'wx' });
+  return { status: 'ok', effect: suite.effect, directory: output, report, fits: rows.length, accepted: rows.filter(r => r.fit.accepted).length, ambiguous: rows.filter(r => r.fit.ambiguous).length, mappings: mappings.length, models };
 }
 export async function identifyEq(action: string, raw: unknown) {
   if (action === 'create') {
-    const o = fields(raw, ['out_file', 'plugin', 'plugin_name', 'native_host', 'neutral_parameters', 'bands', 'sample_rate', 'channels', 'duration', 'buffer_size', 'timeout_seconds', 'families', 'stages'], 'EQ identification create');
+    const o = fields(raw, ['out_file', 'effect', 'plugin', 'plugin_name', 'native_host', 'neutral_parameters', 'bands', 'sample_rate', 'channels', 'duration', 'buffer_size', 'timeout_seconds', 'families', 'stages'], 'EQ identification create');
     if (typeof o.out_file !== 'string') throw new Error('out_file required');
     const { out_file, ...configuration } = o, suite = design(configuration), path = expand(out_file);
     // Resolve the selected artifact, but do not load it during suite creation.
     suite.plan.plugin = identity(suite.plan.plugin).path; configuration.plugin = suite.plan.plugin;
     mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, stringify({ schema_version: 1, design: configuration }, 2) + '\n', { flag: 'wx' });
-    return { status: 'ok', suite: path, cases: suite.plan.cases.length, next: 'eq-identify run; inspect exact names first and explicitly neutralize all other bands.' };
+    return { status: 'ok', suite: path, cases: suite.plan.cases.length, next: 'effects-identify run; inspect exact names first and explicitly neutralize all other bands.' };
   }
   if (!['run', 'analyze'].includes(action)) throw new Error('EQ identification action must be create, run or analyze');
   const o = fields(raw, action === 'run' ? ['suite', 'out_directory', 'native_host', 'channel'] : ['suite', 'run_directory', 'out_directory', 'channel'], 'EQ identification execution');

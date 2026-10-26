@@ -22,13 +22,15 @@ export function doctor(jucePath?: unknown) {
   if (cmake) { const r = spawnSync(cmake, ['--version'], { encoding: 'utf8', windowsHide: true, timeout: 10000 }); if (r.error || r.status !== 0 || !r.stdout.trim()) throw new Error(`CMake version check failed: ${r.error ?? r.stderr}`); version = r.stdout.trim().split(/\r?\n/)[0]; }
   return { cmake, cmake_version: version, juce_path: jucePath ? juceDirectory(jucePath) : null, compiler_candidates: Object.fromEntries(['cl', 'clang++', 'g++'].map(name => [name, which(name)])), ninja: which('ninja'), native_build_verified: false, note: 'Needs CMake >=3.22, a C++17 toolchain and a local JUCE checkout. On Windows use a VS developer shell or a matching CMake VS generator. Compiler discovery is not a build test. No downloads or installs.' };
 }
+// IDs are embedded in generated C++; append variants without renumbering existing starters.
+export const dspVariants = ['gain', 'filter', 'compressor', 'saturation', 'delay', 'sine', 'subtractive', 'reverb', 'phaser', 'flanger', 'limiter', 'chorus', 'tremolo'];
 export function create(projectDirectory: unknown, nameValue: unknown, kind: unknown, manufacturerCode: unknown, pluginCode: unknown, dspValue?: unknown) {
   if (typeof projectDirectory !== 'string') throw new Error('project_directory required');
   const name = identifier(nameValue, 'name'), manufacturer = identifier(manufacturerCode, 'manufacturer_code', /^[A-Za-z][A-Za-z0-9]{3}$/), code = identifier(pluginCode, 'plugin_code', /^[A-Za-z][A-Za-z0-9]{3}$/);
   if (!['effect', 'instrument'].includes(String(kind))) throw new Error('kind must be effect or instrument');
-  const dsp = dspValue ?? (kind === 'instrument' ? 'sine' : 'gain'), variants = ['gain', 'filter', 'compressor', 'saturation', 'delay', 'sine', 'subtractive'];
-  if (typeof dsp !== 'string' || !(kind === 'instrument' ? ['sine', 'subtractive'] : ['gain', 'filter', 'compressor', 'saturation', 'delay']).includes(dsp)) throw new Error('dsp must match kind: effects gain/filter/compressor/saturation/delay; instruments sine/subtractive');
-  const directory = expand(projectDirectory), templates = join(packageRoot, 'templates', 'juce'), values: Record<string, string> = { NAME: name, MANUFACTURER_CODE: manufacturer, PLUGIN_CODE: code, SYNTH: kind === 'instrument' ? 'TRUE' : 'FALSE', DSP_ID: String(variants.indexOf(dsp)), DSP: dsp };
+  const dsp = dspValue ?? (kind === 'instrument' ? 'sine' : 'gain');
+  if (typeof dsp !== 'string' || !dspVariants.filter(v => (kind === 'instrument') === ['sine', 'subtractive'].includes(v)).includes(dsp)) throw new Error(`dsp must match kind: effects ${dspVariants.filter(v => !['sine', 'subtractive'].includes(v)).join('/')}; instruments sine/subtractive`);
+  const directory = expand(projectDirectory), templates = join(packageRoot, 'templates', 'juce'), values: Record<string, string> = { NAME: name, MANUFACTURER_CODE: manufacturer, PLUGIN_CODE: code, SYNTH: kind === 'instrument' ? 'TRUE' : 'FALSE', DSP_ID: String(dspVariants.indexOf(dsp)), DSP: dsp };
   const files = readdirSync(templates).filter(name => name.endsWith('.in')).sort();
   if (['CMakeLists.txt', 'PluginProcessor.h', 'PluginProcessor.cpp', 'README.md', '.gitignore', 'StarterDSP.h', 'SubtractiveVoice.h'].some(name => !files.includes(name + '.in'))) throw new Error('JUCE templates are missing; reinstall Fourier');
   mkdirSync(dirname(directory), { recursive: true }); mkdirSync(directory);

@@ -3,6 +3,7 @@ import { dirname, join } from 'node:path';
 import { archive } from './compare.js';
 import { dump, expand, fields, integer, load, number, sha } from './io.js';
 import { amplitude, db } from './measure.js';
+import { echoResponse, modulationTrace } from './effects.js';
 import type { Samples, State } from './types.js';
 
 export function decayCurve(samples: Samples, sr: number, start: number) {
@@ -26,10 +27,10 @@ export function decayCurve(samples: Samples, sr: number, start: number) {
 }
 export function characterize(directory: string, output: string, raw: unknown) {
   directory = expand(directory); output = expand(output);
-  const o = fields(raw, ['case_ids', 'measurements', 'channel', 'window_seconds', 'window_ms', 'harmonics'], 'characterization');
+  const o = fields(raw, ['case_ids', 'measurements', 'channel', 'window_seconds', 'window_ms', 'harmonics', 'echo_threshold_db', 'echo_spacing_ms'], 'characterization');
   const state = load<State>(join(directory, 'run.json')), ids = o.case_ids ?? state.cases.map(c => c.id), modes = o.measurements ?? ['dynamics'];
   if (!Array.isArray(ids) || !ids.length || ids.length > 16 || new Set(ids).size !== ids.length || ids.some(id => typeof id !== 'string')) throw new Error('case_ids requires 1..16 distinct IDs');
-  if (!Array.isArray(modes) || !modes.length || modes.some(m => !['dynamics', 'distortion', 'decay'].includes(m)) || new Set(modes).size !== modes.length) throw new Error('Select distinct dynamics, distortion and/or decay measurements');
+  if (!Array.isArray(modes) || !modes.length || modes.some(m => !['dynamics', 'distortion', 'decay', 'echo', 'modulation'].includes(m)) || new Set(modes).size !== modes.length) throw new Error('Select distinct dynamics, distortion, decay, echo and/or modulation measurements');
   const channel = integer(o.channel ?? 0, 'channel', 0, 1), harmonics = integer(o.harmonics ?? 10, 'harmonics', 2, 32);
   const cases = ids.map(id => {
     const a = archive(directory, id); if (channel >= a.output.length) throw new Error('Requested channel is absent');
@@ -38,7 +39,7 @@ export function characterize(directory: string, output: string, raw: unknown) {
     const start = Math.round(number(range[0], 'window start', 0, seconds) * a.sr), end = Math.round(number(range[1], 'window end', 0, seconds) * a.sr);
     if (end - start < 32) throw new Error('Window requires >=32 samples');
     const x = a.input[channel].subarray(start, end), y = a.output[channel].subarray(start, end), warnings: string[] = [];
-    let dynamics = null, distortion = null, decay = null;
+    let dynamics = null, distortion = null, decay = null, echo = null, modulation = null;
     if (modes.includes('dynamics')) {
       const windowMs = number(o.window_ms ?? Math.max(20, (end - start) / a.sr * 1000 / 512), 'window_ms', 1, 2000), n = Math.max(1, Math.round(windowMs * a.sr / 1000));
       if (Math.ceil(x.length / n) > 1024) throw new Error('Dynamics envelope exceeds 1024 windows; increase window_ms');
@@ -72,7 +73,19 @@ export function characterize(directory: string, output: string, raw: unknown) {
       decay = decayCurve(a.output[channel].subarray(0, end), a.sr, peak);
       warnings.push('Schroeder reverse integration and linear decay fits, no noise-floor compensation. Truncated/noisy/multi-slope tails can bias extrapolated RT60; inspect R², fitted ranges and the full curve. An impulse through a static gain has no meaningful decay.');
     }
-    return { id, channel, window_seconds: [start / a.sr, end / a.sr], dynamics, distortion, decay, warnings };
+    if (modes.includes('echo')) {
+      if (a.stimulus.kind !== 'impulse') throw new Error('Echo measurement requires an archived impulse stimulus');
+      let peak = 0; for (let i = 1; i < a.input[channel].length; i++) if (Math.abs(a.input[channel][i]) > Math.abs(a.input[channel][peak])) peak = i;
+      if (peak < start || peak >= end || Math.abs(a.input[channel][peak]) < 1e-12) throw new Error('Echo window must include an excited input impulse');
+      echo = echoResponse(a.output[channel].subarray(0, end), a.sr, peak, Math.abs(a.input[channel][peak]), number(o.echo_threshold_db ?? -40, 'echo_threshold_db', -120, 0), number(o.echo_spacing_ms ?? 1, 'echo_spacing_ms', 0.01, 2000));
+      warnings.push('Echo peaks are thresholded local maxima, not inferred delay lines or reverb topology. Up to 64 peaks; threshold is relative to the output peak. Timing includes host latency, dry path and filtering. Energy statistics use only the recorded post-impulse window; noise/truncated tails bias them. A silent response is null.');
+    }
+    if (modes.includes('modulation')) {
+      if ((a.stimulus.kind ?? 'tone') !== 'tone') throw new Error('Modulation measurement requires a continuous tone stimulus');
+      modulation = modulationTrace(x, y, a.sr, a.stimulus.frequency_hz ?? 1000, start, number(o.window_ms ?? 20, 'window_ms', 1, 2000));
+      warnings.push('Windowed carrier gain and wrapped relative phase describe amplitude/phase modulation, not LFO rate/depth or a unique chorus/flanger/phaser model. Use settled continuous tones, several carrier frequencies and multiple modulation cycles. No latency compensation; null phase below -160 dBFS. Intra-window modulation is averaged and incomplete final windows are discarded.');
+    }
+    return { id, channel, window_seconds: [start / a.sr, end / a.sr], dynamics, distortion, decay, echo, modulation, warnings };
   });
   mkdirSync(dirname(output), { recursive: true }); mkdirSync(output);
   const report = join(output, 'characterization.json'); dump(report, { status: 'ok', reference_run_sha256: sha(join(directory, 'run.json')), identity: state.identity, options: o, cases });

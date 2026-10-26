@@ -6,9 +6,11 @@ import { join } from 'node:path';
 import { hostDoctor, nativeHost, checkHost } from '../dist/host.js';
 import { dump, load } from '../dist/io.js';
 import { inspect, preset, run, validate } from '../dist/runner.js';
-import { identifyEq, mappingLaws } from '../dist/eq-identify.js';
+import { mappingLaws } from '../dist/eq-identify.js';
+import { identifyEffects } from '../dist/effects-identify.js';
+import { characterizeEffects } from '../dist/effects.js';
 import { eqFamilies, fitEq, modelPoint } from '../dist/eq-model.js';
-import { characterizeEq, eqFrequencies, eqResponse } from '../dist/eq.js';
+import { eqFrequencies, eqResponse } from '../dist/eq.js';
 import { verify } from '../dist/verify.js';
 import { runBackend } from '../scripts/bridge.mjs';
 const temporary = t => { const dir = mkdtempSync(join(tmpdir(), 'fourier-eq-')); t.after(() => rmSync(dir, { recursive: true, force: true })); return dir; };
@@ -26,6 +28,19 @@ test('plans use effect or generator presets, not effect subtypes', async t => {
   assert.notEqual(rejected.code, 0);
   assert.match(rejected.stdout, /Preset must be effect or generator/);
   assert.equal(existsSync(output), false);
+});
+
+test('legacy EQ CLI entry points are removed', async () => {
+  const help = await runBackend(['--help']);
+  assert.equal(help.code, 0);
+  const { commands } = JSON.parse(help.stdout);
+  assert.ok(commands.includes('effects')); assert.ok(commands.includes('effects-identify'));
+  for (const command of ['eq', 'eq-identify']) {
+    assert.equal(commands.includes(command), false);
+    const rejected = await runBackend([command]);
+    assert.notEqual(rejected.code, 0);
+    assert.match(rejected.stdout, new RegExp(`Unknown command: ${command}`));
+  }
 });
 
 test('host selection fails closed and doctor reports incompatible/missing helpers', async t => {
@@ -46,8 +61,8 @@ test('effect preset supports verified EQ curves and declarative assertions witho
   const dir = temporary(t), spec = join(dir, 'plan.json'), output = join(dir, 'run');
   dump(spec, { ...preset('builtin:gain', 'effect'), duration: .5, parameters: { gain_db: 6 } });
   assert.equal((await run(spec, output)).status, 'ok');
-  const eq = characterizeEq(output, join(dir, 'eq'), { case_ids: ['impulse'], frequencies_hz: [100, 1000, 10000] });
-  const curve = load(eq.report).cases[0].points;
+  const eq = characterizeEffects(output, join(dir, 'eq'), { effect: 'eq', case_ids: ['impulse'], frequencies_hz: [100, 1000, 10000] });
+  const curve = load(eq.report).cases[0].observation.points;
   for (const p of curve) { assert.ok(Math.abs(p.gain_db - 6) < 1e-5); assert.ok(Math.abs(p.phase_degrees) < 1e-5); }
   const checks = [{ case_id: 'impulse', metric: 'eq_gain_db', frequency_hz: 1000, min: 5.99, max: 6.01 }, { case_id: 'tone', metric: 'tone_gain_db', min: 5.99, max: 6.01 }, { case_id: 'impulse', metric: 'candidate_relative_error_db', max: -120 }];
   assert.equal(verify(output, join(dir, 'pass'), { checks, candidate_run: output }).passed, true);
@@ -90,13 +105,13 @@ test('control laws reserve held-out samples and report failed validation', () =>
 
 test('identification suite create/run/analyze is reusable and refuses mismatched runs', async t => {
   const dir = temporary(t), suite = join(dir, 'suite.json');
-  const design = { plugin: 'builtin:gain', neutral_parameters: { gain_db: 0 }, bands: [{ id: 'test', parameters: { gain_db: 6 }, controls: [{ parameter: 'gain_db', values: [-6, -3, 3, 6] }] }], duration: .5, channels: 1, families: ['bell'], stages: [1] };
-  const created = await identifyEq('create', { ...design, out_file: suite }); assert.equal(created.cases, 6);
-  const executed = await identifyEq('run', { suite, out_directory: join(dir, 'execution') });
+  const design = { effect: 'eq', plugin: 'builtin:gain', neutral_parameters: { gain_db: 0 }, bands: [{ id: 'test', parameters: { gain_db: 6 }, controls: [{ parameter: 'gain_db', values: [-6, -3, 3, 6] }] }], duration: .5, channels: 1, families: ['bell'], stages: [1] };
+  const created = await identifyEffects('create', { ...design, out_file: suite }); assert.equal(created.cases, 6);
+  const executed = await identifyEffects('run', { suite, out_directory: join(dir, 'execution') });
   assert.equal(executed.fits, 5); assert.equal(executed.ambiguous, 5); // A flat gain cannot identify frequency/Q.
   const report = load(executed.report); assert.equal(report.mappings[0].targets[0].laws.length, 0);
-  await assert.rejects(identifyEq('create', { ...design, out_file: suite }), /EEXIST/);
-  await assert.rejects(identifyEq('create', { ...design, out_file: join(dir, 'bad.json'), neutral_parameters: {} }), /neutral_parameters/);
+  await assert.rejects(identifyEffects('create', { ...design, out_file: suite }), /EEXIST/);
+  await assert.rejects(identifyEffects('create', { ...design, out_file: join(dir, 'bad.json'), neutral_parameters: {} }), /neutral_parameters/);
   dump(join(dir, 'changed.json'), { schema_version: 1, design: { ...design, duration: .6 } });
-  await assert.rejects(identifyEq('analyze', { suite: join(dir, 'changed.json'), run_directory: join(dir, 'execution', 'run'), out_directory: join(dir, 'invalid') }), /does not match/);
+  await assert.rejects(identifyEffects('analyze', { suite: join(dir, 'changed.json'), run_directory: join(dir, 'execution', 'run'), out_directory: join(dir, 'invalid') }), /does not match/);
 });

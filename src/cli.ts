@@ -12,9 +12,9 @@ import { characterize } from './characterize.js';
 import { match } from './match.js';
 import { buildHost, juce } from './juce.js';
 import { hostDoctor } from './host.js';
-import { characterizeEq } from './eq.js';
 import { verify } from './verify.js';
-import { identifyEq } from './eq-identify.js';
+import { characterizeEffects } from './effects.js';
+import { identifyEffects } from './effects-identify.js';
 import type { Audio } from './types.js';
 
 async function readOptions() {
@@ -24,12 +24,12 @@ async function readOptions() {
   catch (error) { throw new Error(`Invalid tool options: ${error instanceof Error ? error.message : error}`); }
 }
 export async function main(argv = process.argv.slice(2)) {
-  const command = argv[0], action = ['juce', 'match', 'eq-identify'].includes(command) ? argv[1] : undefined;
+  const command = argv[0], action = ['juce', 'match', 'effects-identify'].includes(command) ? argv[1] : undefined;
   const schemas: Record<string, Record<string, { type: 'string' | 'boolean'; multiple?: boolean }>> = {
     doctor: {}, 'self-test': {}, 'setup-native': { juce: { type: 'string' }, generator: { type: 'string' }, jobs: { type: 'string' } },
     juce: { 'options-stdin': { type: 'boolean' } }, match: { 'options-stdin': { type: 'boolean' } },
-    'eq-identify': { 'options-stdin': { type: 'boolean' }, 'native-host': { type: 'string' } },
-    eq: { run: { type: 'string' }, out: { type: 'string' }, 'options-stdin': { type: 'boolean' } },
+    'effects-identify': { 'options-stdin': { type: 'boolean' }, 'native-host': { type: 'string' } },
+    effects: { run: { type: 'string' }, out: { type: 'string' }, 'options-stdin': { type: 'boolean' } },
     verify: { run: { type: 'string' }, out: { type: 'string' }, 'options-stdin': { type: 'boolean' } },
     characterize: { run: { type: 'string' }, out: { type: 'string' }, 'options-stdin': { type: 'boolean' } }, discover: { root: { type: 'string', multiple: true } },
     inspect: { plugin: { type: 'string' }, 'plugin-name': { type: 'string' }, out: { type: 'string' }, timeout: { type: 'string' } },
@@ -67,8 +67,8 @@ export async function main(argv = process.argv.slice(2)) {
     return { status: state.status, directory: target, report: join(target, 'REPORT.md'), completed: state.cases.filter(c => c.status === 'ok').length, total: state.spec.cases.length };
   }
   if (command === 'match') return match(action ?? '', { ...await options(), ...(host ? { native_host: host } : {}) });
-  if (command === 'eq-identify') return identifyEq(action ?? '', { ...await options(), ...(host ? { native_host: host } : {}) });
-  if (command === 'eq') return characterizeEq(path('run'), path('out'), await options());
+  if (command === 'effects') return characterizeEffects(path('run'), path('out'), await options());
+  if (command === 'effects-identify') return identifyEffects(action ?? '', { ...await options(), ...(host ? { native_host: host } : {}) });
   if (command === 'verify') return verify(path('run'), path('out'), await options());
   if (command === 'characterize') return characterize(path('run'), path('out'), await options());
   if (command === 'compare') return compare(path('run'), path('out'), await options());

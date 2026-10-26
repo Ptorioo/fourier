@@ -10,9 +10,9 @@
 - Analytical built-in effects/instrument for calibration without loading any vendor plug-in.
 - Reusable paired reference/candidate suites, bounded grid fitting with held-out cases, and specialized dynamics/distortion/decay analysis.
 - Timed parameter events and identity/settings-bound state capture/recall, with archived readbacks and resume checks.
-- JUCE gain/filter-EQ/compressor/saturation/delay effects and sine/subtractive instruments, local CMake builds and build-to-inspect/render workflow.
+- JUCE gain/filter-EQ/compressor/saturation/delay/reverb/phaser/flanger/limiter/chorus/tremolo effects and sine/subtractive instruments, local builds and build-to-inspect/render workflow.
 - Capability-checked native-host selection, reusable EQ response/phase measurements and declarative pass/fail checks.
-- Bounded isolated-band EQ surrogate fitting and sampled control-mapping hypotheses with held-out checks.
+- Unified effects SDK: EQ/filter, static dynamics, waveshaper, feedback-delay, decay and carrier-modulation surrogate fitting, with local control mappings and held-out checks.
 
 No separate GUI builder, playback, cloud service, dependency installation on package load, or automatic binary patching/debugger attachment. Starters use JUCE's generic editor; editable projects can implement custom interfaces. See [Write VST3 plug-ins with JUCE](#write-vst3-plug-ins-with-juce) for the included starter workflow.
 
@@ -39,7 +39,7 @@ npm run setup:native -- --juce D:/SDKs/JUCE --generator Ninja --jobs 2
 npm run doctor
 ```
 
-Use a supported Visual Studio generator instead of Ninja when not in a developer shell. The host is found at `<package>/native/build/fourier-host[.exe]`, independent of the invocation cwd. Host selection is: explicit operation override → plan/suite `native_host` → `FOURIER_NATIVE_HOST` → package default, where applicable. Pi `doctor`, `inspect`, `plan`, `run`, `match` and EQ identification accept `native_host`; CLI equivalents accept `--native-host PATH`. A selected missing/incompatible helper is an error, never a reason to silently switch helpers.
+Use a supported Visual Studio generator instead of Ninja when not in a developer shell. The host is found at `<package>/native/build/fourier-host[.exe]`, independent of the invocation cwd. Host selection is: explicit operation override → plan/suite `native_host` → `FOURIER_NATIVE_HOST` → package default, where applicable. Pi `doctor`, `inspect`, `plan`, `run`, `match` and effects/EQ identification accept `native_host`; CLI equivalents accept `--native-host PATH`. A selected missing/incompatible helper is an error, never a reason to silently switch helpers.
 
 `doctor` runs only the selected helper's `--capabilities` handshake, not any plug-in. It reports protocol/version, inspect/render/state/automation flags, resolved path/hash and `host_error`. Check `plugins_ready`, plus `state_ready`/`automation_ready` before those features. Executable presence alone is not readiness; old helpers must be rebuilt from current source. Plans/runs record the selected host in provenance; changing it requires a new run rather than resuming old evidence. Built-ins and WAV analysis need no helper even if native readiness is false. No SDK downloads, system plug-in installation or Python environment are involved. Review your local JUCE licence before distributing native builds.
 
@@ -52,7 +52,7 @@ plan JSON, or repeated `fourier.mjs` argument lists are needed. For example:
 fourier_doctor({})
 fourier_plan({ plugin: 'builtin:gain', preset: 'effect', out_file: 'runs/eq-plan.json' })
 fourier_run({ spec_path: 'runs/eq-plan.json', out_directory: 'runs/eq' })
-fourier_eq({ run_directory: 'runs/eq', out_directory: 'runs/eq-response' })
+fourier_effects({ effect: 'eq', run_directory: 'runs/eq', out_directory: 'runs/eq-response', case_ids: ['impulse', 'noise'] })
 ```
 
 These are Pi tool calls, not a script to paste into a shell. Ask Pi for the
@@ -98,10 +98,10 @@ The npm executable is `fourier-audio` when this package is installed. Before lau
 | `fourier_run` | Render a plan, checkpoint and report |
 | `fourier_analyze` | Measure existing PCM WAVs, optionally against an aligned reference |
 | `fourier_compare` | Verify archives; channel gains, complex H1/coherence, spectral-bin levels, band envelopes and candidate null errors |
-| `fourier_characterize` | Offline RMS/gain trajectories, coherent THD/selected IMD, impulse energy-decay fits |
-| `fourier_eq` | Verified impulse/noise EQ gain, wrapped phase, coherence and measured grid extrema |
+| `fourier_characterize` | Offline RMS/gain, coherent THD/selected IMD, decay, thresholded echo peaks and carrier modulation |
+| `fourier_effects` | Unified verified EQ/filter, dynamics, saturation, impulse and carrier-response measurements |
+| `fourier_effects_identify` | Create/run/reanalyze effect suites; bounded surrogates and local control mappings, including full EQ isolation |
 | `fourier_verify` | Declarative inclusive bounds for gain/level/latency/EQ/candidate-null metrics |
-| `fourier_eq_identify` | Create/run/reanalyze explicit isolated-band suites; bounded RBJ models and local control laws |
 | `fourier_match` | Create/run paired suites; fit a bounded parameter grid, then evaluate held-out cases |
 | `fourier_report` | Rebuild reports without loading a plug-in |
 | `fourier_rea` | Optional MCP discovery/read-only calls and external-evidence attachments |
@@ -134,10 +134,14 @@ fourier_inspect({ plugin: '<returned plugin path>', out_directory: 'runs/my-insp
 Use `kind: 'instrument'`, a different `name` and unique `plugin_code` for a MIDI
 instrument. Optional `dsp` selects `gain` (default effect), `filter` (low/high-pass
 or peak EQ), `compressor` (linked peak/soft knee), `saturation` (tanh), `delay`
-(fractional feedback), `sine` (default instrument), or `subtractive` (polyBLEP
+(fractional feedback), `reverb` (JUCE Freeverb-style), `phaser` (JUCE six-stage),
+`flanger`/`chorus` (JUCE modulated delay with short/long defaults), `limiter`
+(linked sample-peak, no lookahead), `tremolo` (sine amplitude modulation),
+`sine` (default instrument), or `subtractive` (polyBLEP
 saw/square/sine → one-pole low-pass → ADSR). Each instrument has eight voices,
 velocity, sustain and stealing; subtractive adds ±2-semitone pitch bend and CC1
 vibrato. All have mono/stereo output, smoothed gain, generic editor and APVTS state.
+For the limiter, gain is pre-limiter so the sample ceiling remains effective; this is not true-peak limiting.
 
 ```js
 fourier_juce({ action: 'create', project_directory: 'plugins/Subtractive', name: 'Subtractive',
@@ -208,7 +212,7 @@ For an independent candidate, render a second plan with the **same case IDs and 
 
 H1 gain, wrapped `h1_phase_degrees`, coherence and Hann-windowed band-energy ratios are descriptive measurements, **not** proof of LTI behavior, FFT internals or calibrated attack/release constants. Phase includes uncompensated delay and is not group delay or a minimum-phase classification. Use an excited, settled signal and check coherence; coherence is null with only one segment. `input_bin_peak_dbfs` and `output_bin_peak_dbfs` are averaged Hann-windowed, sine-equivalent bin amplitudes, not PSD. They remain available when input excitation is insufficient for H1, but a peak alone does not establish harmonic/intermodulation attribution; use baseline and leakage controls. A quiet right probe can reveal a linked gain curve while the loud left driver controls detection; it does not imply an independent right-channel detector. Hash checks detect accidental artifact changes, not maliciously rewritten history.
 
-The CLI also accepts JSON options through `--options FILE` or bounded `--options-stdin` (mutually exclusive) for `init`, `compare`, `characterize`, `eq`, `verify`, `eq-identify`, `match` and `juce`. Pi tools use stdin automatically; no one-off analysis script or temporary options file is required.
+The CLI also accepts JSON options through `--options FILE` or bounded `--options-stdin` (mutually exclusive) for `init`, `compare`, `characterize`, `effects`, `effects-identify`, `verify`, `match` and `juce`. Pi tools use stdin automatically; no one-off analysis script or temporary options file is required.
 
 ### Reusable EQ measurements and pass/fail checks
 
@@ -218,8 +222,8 @@ fourier_plan({
   parameters: { gain_db: 6 }
 })
 fourier_run({ spec_path: 'runs/eq-plan.json', out_directory: 'runs/eq' })
-fourier_eq({
-  run_directory: 'runs/eq', out_directory: 'runs/eq-response',
+fourier_effects({
+  effect: 'eq', run_directory: 'runs/eq', out_directory: 'runs/eq-response',
   case_ids: ['impulse', 'noise'], frequencies_hz: [100, 1000, 10000]
 })
 fourier_verify({
@@ -230,35 +234,115 @@ fourier_verify({
 })
 ```
 
-The `effect` preset supplies `silence`, `impulse`, `tone` (1,000 Hz), seeded continuous `noise`, `sweep`, `step_tone`, `resonance` and `competition` cases for EQ and other effects. Use explicit cases for additional frequencies, levels or timing. The former `eq` preset value is no longer accepted; use `effect` when creating new plans. Existing plan JSON remains valid because it stores explicit cases, not a preset value. `fourier_eq` analyzes 1–16 selected cases and 1–256 frequencies (default 128 logarithmic points), one channel per call. It verifies archives and reports actual FFT bins, gain, wrapped phase, available noise coherence and grid extrema in `eq.json`. Impulse response uses an unwindowed complex FFT ratio; noise H1 uses the final 75% of the recording. Automated cases are rejected. Allow sufficient settling/decay and control level dependence; these are descriptive curves, not automatic center-frequency/Q, bandwidth, group delay or unique topology recovery.
+The `effect` preset supplies `silence`, `impulse`, `tone` (1,000 Hz), seeded continuous `noise`, `sweep`, `step_tone`, `resonance` and `competition` cases for EQ and other effects. Use explicit cases for additional frequencies, levels or timing. The former `eq` preset value is no longer accepted; use `effect` when creating new plans. Existing plan JSON remains valid because it stores explicit cases, not a preset value. `fourier_effects` with `effect:'eq'` or `'filter'` analyzes 1–16 selected cases and 1–256 frequencies (default 128 logarithmic points), one channel per call. It verifies archives and reports actual FFT bins, gain, wrapped phase and available noise coherence in `effects.json`. Impulse response uses an unwindowed complex FFT ratio; noise H1 uses the final 75% of the recording. Automated cases are rejected. Allow sufficient settling/decay and control level dependence; these are descriptive curves, not automatic center-frequency/Q, bandwidth, group delay or unique topology recovery.
 
 `fourier_verify` writes `verification.json` for 1–128 checks; each needs `case_id`, `metric`, and inclusive `min` and/or `max`, with optional zero-based `channel` (default 0). Metrics: `tone_gain_db`, `peak_dbfs`, `rms_dbfs`, `dc`, `full_scale_fraction`, `reported_latency_samples`, `impulse_peak_lag_samples`, `eq_gain_db`, `eq_phase_degrees`, `candidate_relative_error_db`. EQ checks require `frequency_hz`; tone checks require a continuous tone and use the final up-to-one-second window. Levels/DC/fractions use the full output. Missing/unexcited metrics fail, never pass by omission. Candidate error requires explicit `candidate_run` with exactly matching inputs; an exact null is marked `exact_null: true`, while a silent reference has undefined relative error. CLI failures exit nonzero and Pi reports an error with the evidence path. Only explicit `lag_samples`/`candidate_lag_samples` are applied; no inferred alignment, normalization or phase unwrapping.
 
-CLI: `init --preset effect`, `eq --run RUN --out NEW --options FILE` and `verify --run RUN --out NEW --options FILE` (or `--options-stdin`). Outputs never overwrite existing evidence.
+CLI: `init --preset effect`, `effects --run RUN --out NEW --options FILE` (options include `effect:'eq'`) and `verify --run RUN --out NEW --options FILE` (or `--options-stdin`). Outputs never overwrite existing evidence.
+
+### Unified effects SDK: measurements, models and identification
+
+`fourier_effects` and `fourier_effects_identify` cover `eq`, `filter`, `compressor`,
+`limiter`, `saturation`, `delay`, `reverb`, `phaser`, `flanger`, `chorus`, `tremolo`.
+EQ/filter are integrated, not a second implementation: measurement and fitting reuse
+`src/eq.ts`/`src/eq-model.ts`; identification retains neutral-baseline subtraction,
+explicit band isolation, phase residuals and all existing EQ validation.
+The effects tools are the only public entry points; every suite requires an explicit
+`design.effect` (including `eq` or `filter`). Untyped legacy suites are not accepted.
+
+For **EQ/filter** use `fourier_effects_identify({action:'create', effect:'eq', ...})`
+with the `neutral_parameters`, `bands`, `families`, `stages` design below—not generic
+`parameters`/`controls`. Execution/reanalysis need only the suite and output paths.
+All effect types write `effects-identification.json`/`EFFECTS_IDENTIFICATION.md`.
+EQ/filter reports retain their band-specific models, phase errors and diagnostics.
+For measurements use impulse/noise `case_ids` and optional `frequencies_hz`.
+
+For **other effects**, inspect controls and isolate the effect explicitly, then:
+
+```js
+// Runnable calibration with an analytical built-in, not a vendor model:
+fourier_effects_identify({
+  action: 'create', effect: 'saturation', plugin: 'builtin:clip',
+  out_file: 'runs/saturation-suite.json', parameters: { threshold: 0.25 },
+  controls: [{ parameter: 'threshold', values: [0.15, 0.25, 0.35, 0.45], held_out_indices: [3] }]
+})
+fourier_effects_identify({ action: 'run', suite: 'runs/saturation-suite.json',
+  out_directory: 'runs/saturation-fit' })
+fourier_effects({ effect: 'saturation', run_directory: 'runs/saturation-fit/run',
+  out_directory: 'runs/saturation-measurements', case_ids: ['anchor_probe2'] })
+fourier_effects_identify({ action: 'analyze', suite: 'runs/saturation-suite.json',
+  run_directory: 'runs/saturation-fit/run', out_directory: 'runs/saturation-refit' })
+```
+
+The unified SDK lives in `src/effects.ts` (`effectResponse`, `characterizeEffects`),
+`src/effects-model.ts` (`fitEffect` and typed family fitters), and
+`src/effects-identify.ts` (`identifyEffects`). `fitEffect('eq'|'filter', observations)`
+also delegates to the phase-aware EQ fitter and retains its full diagnostics.
+No new dependency or automatic unknown-control discovery is involved.
+
+| Effect | Generated probes / best-tested surrogate | What is **not** recovered |
+| --- | --- | --- |
+| Compressor/limiter | Nine 1 kHz level tones, −60..−1 dBFS; settled peak hard/soft-knee transfer, threshold/ratio/makeup | Detector, attack/release, lookahead, sidechain, stereo linking |
+| Saturation | Three 997 Hz tones, −24/−12/−1 dBFS; linear/tanh/hard-clip/clipped-cubic with drive/output gain | Wet/dry, asymmetry, filtering, oversampling, memory |
+| Delay | −18 dBFS impulse at 250 ms; single signed integer-feedback delay, dry/wet gains | Fractional/filtered/multi-tap/ping-pong or modulated delay |
+| Reverb | Impulse; reverse-integrated −5..−35 dB exponential energy decay, RT60 | Reconstructive reverb topology, damping network, room size, diffusion; always ambiguous |
+| Phaser/flanger/chorus/tremolo | Long 1 kHz tone; sinusoidal carrier gain/phase trajectory and rate | Internal LFO/topology, stages, delay depth, feedback or wet mix; a trajectory is not a reconstructed processor |
+
+Non-EQ defaults: mono, 48 kHz, 3 s (10 s for modulation), 250 ms settling,
+20 ms carrier windows, modulation search `[0.2,10]` Hz. Explicit `sample_rate`,
+`channels`, `duration` (0.5–30 s), `settle_seconds`, `window_ms`, `lag_samples`,
+`rate_bounds_hz`, `buffer_size`, `timeout_seconds`, `plugin_name`, `native_host` are
+supported. Native numeric controls are normalized **0..1**, strings must match
+inspection exactly. Each configuration starts a fresh instance. Up to three
+one-factor controls, 2–8 values each, **64 total probe cases and 512 MB raw audio**;
+compressor/limiter configurations need nine cases apiece, saturation three.
+
+Reports `analysis/effects-identification.json`/`EFFECTS_IDENTIFICATION.md` include
+measurements, selected model, errors, acceptance, ambiguity, per-model limits and
+local linear/exponential/power mapping hypotheses. Every fourth level/sample/
+decay point/carrier window is held out; delay holds out the last third of its
+impulse tail and refuses to validate a silent tail. Held-out control indices
+exclude values from mapping-law training (last value defaults to held out with
+at least four values). Measurement holdouts are **not independent renders**.
+No holdout means no mapping validation; inconsistent model families get no law.
+
+Use independent signals/rates/levels to validate the frozen result. Explicit lag
+only; no alignment, normalization, wet/dry compensation or latency guesses.
+Modulation requires at least two fitted cycles and 32–1024 complete integer-cycle
+carrier windows; increase duration for slow effects and narrow the rate bounds
+if needed. Delay needs at least three training repeats plus an excited held-out
+tail; reverb needs a resolved decay range. Unsupported/insufficient excitation
+can fail rather than produce misleading parameters. A close fit remains a
+bounded surrogate, not recovered proprietary source or perceptual equivalence.
+
+CLI: `effects --run RUN --out NEW --options FILE` and
+`effects-identify create|run|analyze --options FILE` (or `--options-stdin`). Create
+loads nothing; run executes trusted plug-ins, stops on failure and never retries;
+analyze only reads verified archives. New output paths are required.
 
 ### Bounded EQ model and control identification
 
 Inspect the selected plug-in first. Explicitly neutralize **all** other bands and wet/output settings, then provide one isolated band and sampled controls. The following variables must come from that inspection; names/roles are not guessed:
 
 ```js
-fourier_eq_identify({
-  action: 'create', plugin: selectedPlugin, out_file: 'runs/eq-suite.json',
+fourier_effects_identify({
+  action: 'create', effect: 'eq', plugin: selectedPlugin, out_file: 'runs/eq-suite.json',
   neutral_parameters: neutralSettingsFromInspection,
   bands: [{ id: 'band1', parameters: isolatedBandSettings,
     controls: [{ parameter: inspectedFrequencyKey,
       values: [0.2, 0.3, 0.4, 0.5], held_out_indices: [3] }] }]
 })
-fourier_eq_identify({ action: 'run', suite: 'runs/eq-suite.json', out_directory: 'runs/identified' })
+fourier_effects_identify({ action: 'run', suite: 'runs/eq-suite.json', out_directory: 'runs/identified' })
 // Refit existing verified audio without loading a plug-in:
-fourier_eq_identify({ action: 'analyze', suite: 'runs/eq-suite.json',
+fourier_effects_identify({ action: 'analyze', suite: 'runs/eq-suite.json',
   run_directory: 'runs/identified/run', out_directory: 'runs/reanalyzed' })
 ```
 
 Native numeric control values remain normalized 0..1; strings retain lookup samples rather than invented numeric laws. Each band gets an anchor plus one-factor-at-a-time control probes. The workflow renders a neutral baseline and −24 dBFS impulse at 250 ms, subtracts baseline magnitude/phase, then fits bounded RBJ bell/shelves/pass/notch/band-pass models with repeated identical sections. Default `families` includes all seven; default `stages` is `[1,2]` (explicit 1..4). This is not a search over arbitrary filter architectures. Select 1–7 bands, at most four controls each, 2–8 values per control, at most 64 total cases and 512 MB raw audio. Duration is 0.5–10 seconds; longer settling/tails may invalidate these probes.
 
-Reports `analysis/eq-identification.json` and `EQ_IDENTIFICATION.md` keep measured points, readbacks, alternatives, acceptance/ambiguity, train/held-out magnitude/phase errors and local linear/exponential/power-law hypotheses. Every fourth frequency is held out of model optimization. Explicit `held_out_indices` exclude control values from law fitting; with four or more values the last is held out by default, otherwise there is no held-out control validation. These frequency bins are not independent renders, and mapping laws must not be extrapolated beyond sampled values. Flat responses cannot identify frequency/Q. A close fit is a best-tested surrogate, **not proof of the original topology or proprietary source**; validate independent signals, levels and rates before reconstruction claims.
+Reports `analysis/effects-identification.json` and `EFFECTS_IDENTIFICATION.md` keep measured points, readbacks, alternatives, acceptance/ambiguity, train/held-out magnitude/phase errors and local linear/exponential/power-law hypotheses. Every fourth frequency is held out of model optimization. Explicit `held_out_indices` exclude control values from law fitting; with four or more values the last is held out by default, otherwise there is no held-out control validation. These frequency bins are not independent renders, and mapping laws must not be extrapolated beyond sampled values. Flat responses cannot identify frequency/Q. A close fit is a best-tested surrogate, **not proof of the original topology or proprietary source**; validate independent signals, levels and rates before reconstruction claims.
 
-CLI equivalents: `eq-identify create|run|analyze --options FILE` or `--options-stdin`; `run` loads only the selected trusted plug-in, while `create`/`analyze` do not load it. Render failures stop without automatic retry. Unsupported formats such as FL-native DLLs still require external host exports or a separately implemented bridge.
+CLI equivalents: `effects-identify create|run|analyze --options FILE` or `--options-stdin`; `run` loads only the selected trusted plug-in, while `create`/`analyze` do not load it. Render failures stop without automatic retry. Unsupported formats such as FL-native DLLs still require external host exports or a separately implemented bridge.
 
 ### Timed automation and state recall
 
@@ -345,8 +429,15 @@ fourier_characterize({ run_directory: 'runs/reference', out_directory: 'runs/cha
   window_seconds: [1, 2], window_ms: 20, harmonics: 10 })
 // Impulse-only cases, long enough to capture the tail:
 fourier_characterize({ run_directory: 'runs/reference', out_directory: 'runs/decay',
-  case_ids: ['impulse'], measurements: ['decay'] })
+  case_ids: ['impulse'], measurements: ['decay', 'echo'], echo_threshold_db: -60, echo_spacing_ms: 1 })
+fourier_characterize({ run_directory: 'runs/reference', out_directory: 'runs/modulation',
+  case_ids: ['tone'], measurements: ['modulation'], window_ms: 20 })
 ```
+
+`echo` measures thresholded sample peaks (first 64 retained), onset/peak timing,
+energy centroid/spread and 99% energy time—not discrete-tap topology. `modulation`
+measures carrier gain and wrapped phase in 2–1024 complete windows with at least
+two integer carrier cycles apiece. Both reject incompatible stimuli.
 
 This verifies 1–16 archived cases and writes `characterization.json` without
 loading a plug-in. Select compatible cases/measurements; a mixed incompatible
