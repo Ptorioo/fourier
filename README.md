@@ -11,8 +11,10 @@
 - Reusable paired reference/candidate suites, bounded grid fitting with held-out cases, and specialized dynamics/distortion/decay analysis.
 - Timed parameter events and identity/settings-bound state capture/recall, with archived readbacks and resume checks.
 - JUCE gain/filter-EQ/compressor/saturation/delay effects and sine/subtractive instruments, local CMake builds and build-to-inspect/render workflow.
+- Capability-checked native-host selection, reusable EQ response/phase measurements and declarative pass/fail checks.
+- Bounded isolated-band EQ surrogate fitting and sampled control-mapping hypotheses with held-out checks.
 
-No analysis GUI, playback, cloud service, dependency installation on package load, or automatic binary patching/debugger attachment. Generated plug-ins have JUCE's generic parameter editor.
+No separate GUI builder, playback, cloud service, dependency installation on package load, or automatic binary patching/debugger attachment. Starters use JUCE's generic editor; editable projects can implement custom interfaces. See [Write VST3 plug-ins with JUCE](#write-vst3-plug-ins-with-juce) for the included starter workflow.
 
 ## Requirements and setup
 
@@ -28,7 +30,7 @@ npm test
 pi install path/to/fourier
 ```
 
-Reload Pi (`/reload`) or start a new session. Use `/fourier` for a summary, `/skill:audio-analysis` for measurements, or `/skill:juce-development` for writing plug-ins. `pi install` registers the local package; this repository has not been published to npm. Setup compiles the TypeScript backend into `dist/`; `npm test` runs the checks. Nothing is installed globally. Published/packed packages include compiled JavaScript, so their CLI does not need a compiler at runtime.
+Reload Pi (`/reload`) or start a new session. Use `/fourier` for a summary, `/skill:audio-analysis` for measurements, or `/skill:juce-development` for writing plug-ins. `pi install` registers the local package; this repository has not been published to npm. Setup compiles the TypeScript backend into `dist/`; `npm test` runs the checks. Nothing is installed globally. Published/packed packages include compiled JavaScript and a content-hash build stamp, so unchanged packages do not need a compiler at runtime.
 
 For trusted native plug-ins, build the optional host once in a compiler developer shell:
 
@@ -37,7 +39,28 @@ npm run setup:native -- --juce D:/SDKs/JUCE --generator Ninja --jobs 2
 npm run doctor
 ```
 
-Use a supported Visual Studio generator instead of Ninja when not in a developer shell. The host is found at `<package>/native/build/fourier-host[.exe]`, independent of the invocation cwd. Set `FOURIER_NATIVE_HOST` to an absolute executable path to use a separately built compatible host. No SDK downloads, system plug-in installation or Python environment are involved. Review your local JUCE licence before distributing native builds.
+Use a supported Visual Studio generator instead of Ninja when not in a developer shell. The host is found at `<package>/native/build/fourier-host[.exe]`, independent of the invocation cwd. Host selection is: explicit operation override → plan/suite `native_host` → `FOURIER_NATIVE_HOST` → package default, where applicable. Pi `doctor`, `inspect`, `plan`, `run`, `match` and EQ identification accept `native_host`; CLI equivalents accept `--native-host PATH`. A selected missing/incompatible helper is an error, never a reason to silently switch helpers.
+
+`doctor` runs only the selected helper's `--capabilities` handshake, not any plug-in. It reports protocol/version, inspect/render/state/automation flags, resolved path/hash and `host_error`. Check `plugins_ready`, plus `state_ready`/`automation_ready` before those features. Executable presence alone is not readiness; old helpers must be rebuilt from current source. Plans/runs record the selected host in provenance; changing it requires a new run rather than resuming old evidence. Built-ins and WAV analysis need no helper even if native readiness is false. No SDK downloads, system plug-in installation or Python environment are involved. Review your local JUCE licence before distributing native builds.
+
+## Quick start in Pi
+
+Use the structured `fourier_*` tools directly—no shell commands, handwritten
+plan JSON, or repeated `fourier.mjs` argument lists are needed. For example:
+
+```javascript
+fourier_doctor({})
+fourier_plan({ plugin: 'builtin:gain', preset: 'eq', out_file: 'runs/eq-plan.json' })
+fourier_run({ spec_path: 'runs/eq-plan.json', out_directory: 'runs/eq' })
+fourier_eq({ run_directory: 'runs/eq', out_directory: 'runs/eq-response' })
+```
+
+These are Pi tool calls, not a script to paste into a shell. Ask Pi for the
+measurement you want; the extension supplies the typed tools. It uses the
+shared Node backend internally, but Pi does not need to compose CLI commands.
+Use `fourier_juce` for project creation/builds and `fourier_report` to regenerate
+verified reports. If tools are missing, install/reload the extension rather
+than falling back to shell-based analysis. See [Pi tools](#pi-tools) below.
 
 ## Quick start without Pi
 
@@ -62,13 +85,13 @@ node scripts/fourier.mjs run --spec effect-plan.json --out runs/my-effect
 
 For an instrument, use `--preset generator`. A Windows VST3 bundle is resolved to its current-architecture native binary. Multi-plugin files may need `--plugin-name` for inspection and `plugin_name` in the plan. Never select an installer. Discovery does not load plug-ins; inspection/rendering do execute third-party code.
 
-The npm executable is `fourier-audio` when this package is installed. Source changes require `npm run build`; the launcher and disposable workers execute compiled JavaScript from `dist/`.
+The npm executable is `fourier-audio` when this package is installed. Before launching a backend operation, both Pi tools and the CLI verify hashes of backend TypeScript, build configuration and compiled outputs. Missing/stale `dist/` is rebuilt automatically using the local TypeScript compiler; failed compilation blocks launch rather than using old code. Nothing is downloaded. If build dependencies are absent, the error asks you to install them and run `npm run build`. Explicit `npm run build`/`npm run setup` still work; disposable workers execute the verified JavaScript from `dist/`.
 
 ## Pi tools
 
 | Tool | Purpose |
 | --- | --- |
-| `fourier_doctor` | Check dependencies without loading plug-ins |
+| `fourier_doctor` | Check Node and selected native-helper protocol/capabilities without loading plug-ins |
 | `fourier_discover` | Find VST3/AU candidates without executing them |
 | `fourier_inspect` | Isolated load, parameter metadata/readbacks, identity, instrument flag |
 | `fourier_plan` | Validated, non-overwriting plan from typed parameters, cases and render settings |
@@ -76,6 +99,9 @@ The npm executable is `fourier-audio` when this package is installed. Source cha
 | `fourier_analyze` | Measure existing PCM WAVs, optionally against an aligned reference |
 | `fourier_compare` | Verify archives; channel gains, complex H1/coherence, spectral-bin levels, band envelopes and candidate null errors |
 | `fourier_characterize` | Offline RMS/gain trajectories, coherent THD/selected IMD, impulse energy-decay fits |
+| `fourier_eq` | Verified impulse/noise EQ gain, wrapped phase, coherence and measured grid extrema |
+| `fourier_verify` | Declarative inclusive bounds for gain/level/latency/EQ/candidate-null metrics |
+| `fourier_eq_identify` | Create/run/reanalyze explicit isolated-band suites; bounded RBJ models and local control laws |
 | `fourier_match` | Create/run paired suites; fit a bounded parameter grid, then evaluate held-out cases |
 | `fourier_report` | Rebuild reports without loading a plug-in |
 | `fourier_rea` | Optional MCP discovery/read-only calls and external-evidence attachments |
@@ -182,7 +208,57 @@ For an independent candidate, render a second plan with the **same case IDs and 
 
 H1 gain, wrapped `h1_phase_degrees`, coherence and Hann-windowed band-energy ratios are descriptive measurements, **not** proof of LTI behavior, FFT internals or calibrated attack/release constants. Phase includes uncompensated delay and is not group delay or a minimum-phase classification. Use an excited, settled signal and check coherence; coherence is null with only one segment. `input_bin_peak_dbfs` and `output_bin_peak_dbfs` are averaged Hann-windowed, sine-equivalent bin amplitudes, not PSD. They remain available when input excitation is insufficient for H1, but a peak alone does not establish harmonic/intermodulation attribution; use baseline and leakage controls. A quiet right probe can reveal a linked gain curve while the loud left driver controls detection; it does not imply an independent right-channel detector. Hash checks detect accidental artifact changes, not maliciously rewritten history.
 
-The CLI also accepts bounded JSON options through stdin: `init ... --options-stdin` and `compare --run ... --out ... --options-stdin`. Pi tools handle that transport automatically without temporary option files.
+The CLI also accepts JSON options through `--options FILE` or bounded `--options-stdin` (mutually exclusive) for `init`, `compare`, `characterize`, `eq`, `verify`, `eq-identify`, `match` and `juce`. Pi tools use stdin automatically; no one-off analysis script or temporary options file is required.
+
+### Reusable EQ measurements and pass/fail checks
+
+```js
+fourier_plan({
+  plugin: 'builtin:gain', preset: 'eq', out_file: 'runs/eq-plan.json',
+  parameters: { gain_db: 6 }
+})
+fourier_run({ spec_path: 'runs/eq-plan.json', out_directory: 'runs/eq' })
+fourier_eq({
+  run_directory: 'runs/eq', out_directory: 'runs/eq-response',
+  case_ids: ['impulse', 'noise'], frequencies_hz: [100, 1000, 10000]
+})
+fourier_verify({
+  run_directory: 'runs/eq', out_directory: 'runs/eq-checks', checks: [
+    { case_id: 'impulse', metric: 'eq_gain_db', frequency_hz: 1000, min: 5.99, max: 6.01 },
+    { case_id: 'tone_1000', metric: 'tone_gain_db', min: 5.99, max: 6.01 }
+  ]
+})
+```
+
+The `eq` preset generates a delayed impulse, seeded continuous noise and 100/1,000/10,000 Hz tones. `fourier_eq` analyzes 1–16 selected cases and 1–256 frequencies (default 128 logarithmic points), one channel per call. It verifies archives and reports actual FFT bins, gain, wrapped phase, available noise coherence and grid extrema in `eq.json`. Impulse response uses an unwindowed complex FFT ratio; noise H1 uses the final 75% of the recording. Automated cases are rejected. Allow sufficient settling/decay and control level dependence; these are descriptive curves, not automatic center-frequency/Q, bandwidth, group delay or unique topology recovery.
+
+`fourier_verify` writes `verification.json` for 1–128 checks; each needs `case_id`, `metric`, and inclusive `min` and/or `max`, with optional zero-based `channel` (default 0). Metrics: `tone_gain_db`, `peak_dbfs`, `rms_dbfs`, `dc`, `full_scale_fraction`, `reported_latency_samples`, `impulse_peak_lag_samples`, `eq_gain_db`, `eq_phase_degrees`, `candidate_relative_error_db`. EQ checks require `frequency_hz`; tone checks require a continuous tone and use the final up-to-one-second window. Levels/DC/fractions use the full output. Missing/unexcited metrics fail, never pass by omission. Candidate error requires explicit `candidate_run` with exactly matching inputs; an exact null is marked `exact_null: true`, while a silent reference has undefined relative error. CLI failures exit nonzero and Pi reports an error with the evidence path. Only explicit `lag_samples`/`candidate_lag_samples` are applied; no inferred alignment, normalization or phase unwrapping.
+
+CLI: `init --preset eq`, `eq --run RUN --out NEW --options FILE` and `verify --run RUN --out NEW --options FILE` (or `--options-stdin`). Outputs never overwrite existing evidence.
+
+### Bounded EQ model and control identification
+
+Inspect the selected plug-in first. Explicitly neutralize **all** other bands and wet/output settings, then provide one isolated band and sampled controls. The following variables must come from that inspection; names/roles are not guessed:
+
+```js
+fourier_eq_identify({
+  action: 'create', plugin: selectedPlugin, out_file: 'runs/eq-suite.json',
+  neutral_parameters: neutralSettingsFromInspection,
+  bands: [{ id: 'band1', parameters: isolatedBandSettings,
+    controls: [{ parameter: inspectedFrequencyKey,
+      values: [0.2, 0.3, 0.4, 0.5], held_out_indices: [3] }] }]
+})
+fourier_eq_identify({ action: 'run', suite: 'runs/eq-suite.json', out_directory: 'runs/identified' })
+// Refit existing verified audio without loading a plug-in:
+fourier_eq_identify({ action: 'analyze', suite: 'runs/eq-suite.json',
+  run_directory: 'runs/identified/run', out_directory: 'runs/reanalyzed' })
+```
+
+Native numeric control values remain normalized 0..1; strings retain lookup samples rather than invented numeric laws. Each band gets an anchor plus one-factor-at-a-time control probes. The workflow renders a neutral baseline and −24 dBFS impulse at 250 ms, subtracts baseline magnitude/phase, then fits bounded RBJ bell/shelves/pass/notch/band-pass models with repeated identical sections. Default `families` includes all seven; default `stages` is `[1,2]` (explicit 1..4). This is not a search over arbitrary filter architectures. Select 1–7 bands, at most four controls each, 2–8 values per control, at most 64 total cases and 512 MB raw audio. Duration is 0.5–10 seconds; longer settling/tails may invalidate these probes.
+
+Reports `analysis/eq-identification.json` and `EQ_IDENTIFICATION.md` keep measured points, readbacks, alternatives, acceptance/ambiguity, train/held-out magnitude/phase errors and local linear/exponential/power-law hypotheses. Every fourth frequency is held out of model optimization. Explicit `held_out_indices` exclude control values from law fitting; with four or more values the last is held out by default, otherwise there is no held-out control validation. These frequency bins are not independent renders, and mapping laws must not be extrapolated beyond sampled values. Flat responses cannot identify frequency/Q. A close fit is a best-tested surrogate, **not proof of the original topology or proprietary source**; validate independent signals, levels and rates before reconstruction claims.
+
+CLI equivalents: `eq-identify create|run|analyze --options FILE` or `--options-stdin`; `run` loads only the selected trusted plug-in, while `create`/`analyze` do not load it. Render failures stop without automatic retry. Unsupported formats such as FL-native DLLs still require external host exports or a separately implemented bridge.
 
 ### Timed automation and state recall
 
@@ -375,11 +451,13 @@ node scripts/fourier.mjs report --run runs/my-effect
 node scripts/fourier.mjs analyze --output-audio wet.wav --reference dry.wav --tone-hz 1000 --out runs/wav-check
 ```
 
+Report regeneration verifies the stored run fingerprint, all finished-case artifact hashes (including traces/audio), and agreement between result files and checkpoint metrics before writing reports. It also works for failed or interrupted runs; cases still running contribute no measurements. Historical WAV analyses without a fingerprint remain readable with artifact/result verification; newly created WAV analyses include a fingerprint. These hashes detect changes, not an adversary who rewrites the checkpoint and all hashes.
+
 Resume verifies normalized plan, input WAV hashes, source hash, plug-in identity and all completed-case artifact hashes. Failed attempts are renamed, not deleted. Changed inputs/code/binaries require a new run. WAV analysis accepts 8/16/24/32-bit **integer PCM**, not IEEE-float WAV; reference/output must already match rate, channels, length and alignment. It does not load a plug-in.
 
 ### Migration from the Python backend
 
-The Python package and virtual-environment setup have been removed. Replace `FOURIER_PYTHON` with optional `FOURIER_NATIVE_HOST` only when using an external native host. Existing built-in plan fields and the original ten Pi tools remain available (now twelve with match/characterize); native plans must be recreated using current JUCE inspection keys and normalized/text values, not Pedalboard parameter names or physical numeric values.
+The Python package and virtual-environment setup have been removed. Replace `FOURIER_PYTHON` with optional `FOURIER_NATIVE_HOST` only when using an external native host. Existing built-in plan fields and the original ten Pi tools remain available (now fifteen with match/characterize/EQ/verification/identification); native plans must be recreated using current JUCE inspection keys and normalized/text values, not Pedalboard parameter names or physical numeric values.
 
 The TypeScript backend uses Mulberry32/Box–Muller seeded noise rather than NumPy PCG64; seeds are reproducible **within this backend**, not sample-identical to former Python runs. Current tools read old NumPy `.npz` measurement archives for comparison and verify their original fingerprints, but cannot resume old checkpoints because source/host identities changed. Candidate null comparisons still require byte-identical input arrays; re-render both sides with the same backend. Existing local `.fourier/venv` directories are unused and are not automatically deleted.
 
@@ -415,16 +493,28 @@ node scripts/fourier.mjs evidence --run runs/my-effect --file rea-result.json --
 
 ## Development and verification
 
-`npm test` compiles TypeScript, runs Node backend/bridge/REA tests (including actual Pi extension and both skill loaders when Pi is locally available; `PI_HOST_ROOT` overrides auto-detection), and built-in DSP self-checks. Archive tests include independent NumPy-generated fixtures and malformed ZIP rejection; no Python is needed. The defaults use only built-ins and mocked MCP outcomes; they do not automatically load installed vendor plug-ins or attach debuggers. Tests cover tool-argument plans, stdin limits, broadband/gated probes, multitone phase/channel/gate validation, known gain/delay phase calibration, spectral-bin levels, single-segment coherence, spectral/band comparisons, candidate input identity, explicit alignment, tampered archives and skill frontmatter. JUCE tests cover both templates, non-overwriting creation,
+`npm test` compiles TypeScript, runs Node backend/bridge/REA tests (including actual Pi extension and both skill loaders, preferring the locally installed SDK; `PI_HOST_ROOT` overrides local/global auto-detection), and built-in DSP self-checks. Archive tests include independent NumPy-generated fixtures and malformed ZIP rejection; no Python is needed. The defaults use only built-ins and mocked MCP outcomes; they do not automatically load installed vendor plug-ins or attach debuggers. Tests cover tool-argument plans, stdin limits, broadband/gated probes, multitone phase/channel/gate validation, known gain/delay phase calibration, spectral-bin levels, single-segment coherence, spectral/band comparisons, candidate input identity, explicit alignment, tampered archives and skill frontmatter. JUCE tests cover both templates, non-overwriting creation,
 identifier/injection rejection and local SDK/toolchain validation. Both
-skills and tools run through the actual Pi loader. Replication tests cover automation event timing/order, state precedence/settings/hash rejection, bounded fitting and held-out selection, coherent distortion rejection and analytic decay calibration.
+skills and tools run through the actual Pi loader. Replication tests cover automation event timing/order, state precedence/settings/hash rejection, bounded fitting and held-out selection, coherent distortion rejection and analytic decay calibration. EQ tests additionally cover fail-closed host selection before plug-in loading, analytic impulse curves, declarative failures/exact nulls, all seven RBJ families, repeated sections, ambiguous flat fits, sampled mapping laws and suite/run mismatches. The actual Pi-loader test exercises the three new EQ tools. No custom-editor example is included.
 
-Set `FOURIER_JUCE_PATH` to a trusted local JUCE checkout to opt into native builds
-and renders of both starters; optional `FOURIER_JUCE_GENERATOR` selects the
-compiler generator. Build the optional host first, then run
-`node --test --test-name-pattern='opt-in native JUCE' tests/pi-loader.test.mjs`
-in the appropriate developer shell. It leaves artifacts
-under `.fourier/` and performs no system installation.
+Default tests may skip unavailable native prerequisites; a green default run
+alone is not proof of native integration. Use the required suite in a compiler
+developer shell after building the current host:
+
+```powershell
+$env:FOURIER_JUCE_PATH = 'D:/SDKs/JUCE'
+$env:FOURIER_JUCE_GENERATOR = 'Ninja' # optional; use your supported generator
+npm run setup:native -- --juce $env:FOURIER_JUCE_PATH --generator Ninja --jobs 2
+npm run test:integration
+```
+
+`test:integration` fails instead of skipping when the Pi loader, local JUCE
+checkout, compiler, or compatible native host is unavailable. It executes the
+actual Pi extension/skill loaders, typed analysis tools (including report
+integrity rejection), scaffolding, and effect/instrument VST3 build → inspect →
+render checks. Artifacts stay under `.fourier/`; no SDK download or system
+plug-in installation occurs. The separate installed-vendor inspection test
+remains opt-in via `FOURIER_INSPECT_PLUGIN`.
 
 For all seven DSP branches plus native automation/state, set
 `FOURIER_STARTER_JUCE_PATH` to your trusted JUCE checkout and run
@@ -437,4 +527,4 @@ DAW UI/automation, CPU profiling, release packaging and macOS/Linux are not veri
 
 The native inspection check in `tests/pi-loader.test.mjs` is skipped unless `FOURIER_INSPECT_PLUGIN` selects a trusted installed plug-in. It runs through the Pi-loaded `fourier_inspect` tool, keeps local artifacts under `.fourier/` and prints the inspection path. Behavioral experiments use generic plans with the selected plug-in's inspected controls; no vendor-specific parameter names or expected responses are built into the tests.
 
-For development, `npm install` supplies TypeScript, Node typings and the Pi SDK dev dependencies. `npm run typecheck` checks the backend and extension against the real SDK; `npm run check` validates launcher JS syntax. `npm pack --dry-run` checks the installable package. See the development checks and safety limits above for native inspection and remaining release requirements.
+For development, `npm install` supplies TypeScript, Node typings and the Pi SDK dev dependencies. `npm run typecheck` checks the backend and extension against the real SDK; `npm run check` validates launcher JS syntax. `npm pack --dry-run` checks the installable package. The package regression test also launches its payload without `node_modules`, confirming that current prebuilt output needs no runtime compiler. See the development checks and safety limits above for native inspection and remaining release requirements.

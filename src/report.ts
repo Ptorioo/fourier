@@ -2,6 +2,7 @@ import { copyFileSync, existsSync, mkdirSync, readdirSync, realpathSync, statSyn
 import { basename, join, sep } from 'node:path';
 import { dump, expand, load, sha } from './io.js';
 import type { Evidence, State, Traces } from './types.js';
+import { artifactPath, verifiedCase, verifiedRun } from './integrity.js';
 
 export const escape = (value: unknown) => String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&#x27;');
 const safe = (value: unknown) => escape(value).replaceAll('|', '\\|').replaceAll('`', '&#96;').replaceAll('\n', ' ');
@@ -20,7 +21,7 @@ export function attach(directory: string, source: string, claim: string, classif
 }
 export function report(directory: string) {
   directory = expand(directory);
-  const state = load<State>(join(directory, 'run.json')), folder = join(directory, 'evidence');
+  const state = verifiedRun(directory), folder = join(directory, 'evidence');
   const evidence = existsSync(folder) ? readdirSync(folder).filter(name => name.endsWith('.json')).sort().map(name => load<Evidence>(join(folder, name))) : [];
   for (const item of evidence) {
     if (basename(item.artifact) !== item.artifact || /[\\/]/.test(item.artifact) || !realpathSync(join(folder, item.artifact)).startsWith(realpathSync(folder) + sep) || sha(join(folder, item.artifact)) !== item.sha256) throw new Error('Evidence checksum/path mismatch; report regeneration refused');
@@ -28,10 +29,10 @@ export function report(directory: string) {
   const doc = ['# Fourier audio analysis', '', `Run status: **${safe(state.status)}**`, '', `Plug-in: \`${safe(state.identity.path)}\``, '', `SHA-256: \`${safe(state.identity.sha256)}\``, '', '## Observed audio measurements', '', '| Case | Status | Gain at target (dB) | Output RMS ch0 (dBFS) | THD (dB) | Reported latency (samples) |', '|---|---|---:|---:|---:|---:|'];
   const curves: { id: string; spectrum: Traces['spectrum'] }[] = [];
   for (const entry of state.cases) {
-    if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(entry.id)) throw new Error('Invalid case ID in checkpoint');
-    const result = entry.result, metrics = result?.metrics;
+    if (entry.status === 'running' && (entry.result || entry.artifacts)) throw new Error('Running case contains unverified results');
+    const result = entry.status === 'running' ? undefined : verifiedCase(directory, entry), metrics = result?.metrics;
     doc.push(`| ${safe(entry.id)} | ${safe(entry.status)} | ${fmt(metrics?.gain_db)} | ${fmt(metrics?.output[0]?.rms_dbfs)} | ${fmt(metrics?.thd_db)} | ${result?.plugin?.reported_latency_samples ?? '—'} |`);
-    if (entry.status === 'ok') curves.push({ id: entry.id, spectrum: load<Traces>(join(directory, 'cases', entry.id, 'traces.json')).spectrum });
+    if (entry.status === 'ok') curves.push({ id: entry.id, spectrum: load<Traces>(artifactPath(join(directory, 'cases', entry.id), 'traces.json')).spectrum });
   }
   doc.push('', '![Output spectra](spectrum.svg)', '', '## Failures and warnings', '');
   const notices = state.cases.flatMap(entry => [...(entry.status !== 'ok' ? [`- **${safe(entry.id)}**: ${safe(entry.result?.error ?? 'incomplete worker; inspect logs before resuming')}`] : []), ...(entry.result?.warnings ?? []).map(warning => `- ${safe(entry.id)}: ${safe(warning)}`)]);

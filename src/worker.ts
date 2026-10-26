@@ -2,25 +2,24 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { platform } from 'node:os';
-import { arraySha, audioBytes, builtins, dump, identity, integer, load, number, packageRoot, preview, version } from './io.js';
+import { arraySha, audioBytes, builtins, dump, identity, integer, load, number, preview, sha, version } from './io.js';
 import { saveAudio } from './archive.js';
 import { controls, events, snapshot } from './controls.js';
 import { make, midiEvents } from './signals.js';
 import { measure } from './measure.js';
 import type { Audio, PluginInfo, Request, Result, Scalar, Stimulus } from './types.js';
 
-export function nativeHost(): string {
-  const path = process.env.FOURIER_NATIVE_HOST || join(packageRoot, 'native', 'build', 'fourier-host' + (process.platform === 'win32' ? '.exe' : ''));
-  if (!existsSync(path)) throw new Error('JUCE host not built. Run npm run setup:native -- --juce /path/to/JUCE, or set FOURIER_NATIVE_HOST to the built fourier-host executable. Built-ins and analyze-wav do not need it.');
-  return path;
-}
+import { nativeHost } from './host.js';
+export { nativeHost } from './host.js';
 type Rendered = Pick<Result, 'plugin' | 'initial_plugin' | 'automation_readbacks'> & { plugin: PluginInfo; audio?: Audio };
 function native(request: Request, input?: Audio): Rendered {
   const file = join(request.output, 'native.request.json'), response = join(request.output, 'native.result.json');
   dump(file, { ...request, midi: request.stimulus?.kind === 'midi' ? midiEvents(request.stimulus.midi ?? [], request.duration!) : [], input_frames: input?.[0].length ?? 0 });
   if (input) writeFileSync(join(request.output, 'native.input.f32'), audioBytes(input));
   // The runner's worker deadline covers this child too, including process-tree termination.
-  const result = spawnSync(nativeHost(), ['--request', file, '--response', response], { stdio: ['ignore', 'inherit', 'inherit'], windowsHide: true });
+  const host = nativeHost(request.native_host);
+  if (request.native_host_sha256 && sha(host) !== request.native_host_sha256) throw new Error('Native host identity changed before execution');
+  const result = spawnSync(host, ['--request', file, '--response', response], { stdio: ['ignore', 'inherit', 'inherit'], windowsHide: true });
   if (result.error) throw result.error;
   if (result.status !== 0) {
     if (existsSync(response)) throw new Error(load<{ error: string }>(response).error);

@@ -1,19 +1,24 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { closeSync, existsSync, mkdirSync, openSync, realpathSync, renameSync, statSync } from 'node:fs';
-import { basename, dirname, isAbsolute, join, sep } from 'node:path';
+import { dirname, join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { digest, dump, expand, fields, identity, integer, load, number, object, packageRoot, sha, sourceHash } from './io.js';
 import { make } from './signals.js';
 import { controls, params } from './controls.js';
-import { nativeHost } from './worker.js';
+import { checkHost } from './host.js';
 import { report } from './report.js';
+import { safeId, verifiedCase } from './integrity.js';
+export { safeId, artifactPath, verifyArtifacts } from './integrity.js';
 import type { Entry, Plan, Provenance, Request, Result, State, Stimulus } from './types.js';
 
-export const safeId = (value: unknown): value is string => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(value);
 export function validate(value: unknown): Plan {
-  const spec = fields(value, ['schema_version', 'plugin', 'plugin_name', 'sample_rate', 'channels', 'duration', 'buffer_size', 'timeout_seconds', 'parameters', 'cases', 'automation', 'state_file', 'save_state'], 'plan');
+  const spec = fields(value, ['schema_version', 'plugin', 'plugin_name', 'sample_rate', 'channels', 'duration', 'buffer_size', 'timeout_seconds', 'parameters', 'cases', 'automation', 'state_file', 'save_state', 'native_host'], 'plan');
   if ((spec.schema_version ?? 1) !== 1 || typeof spec.plugin !== 'string' || spec.plugin_name != null && typeof spec.plugin_name !== 'string') throw new Error('Invalid plan schema / plugin');
   const out: Plan = { schema_version: 1, plugin: spec.plugin, plugin_name: (spec.plugin_name ?? null) as string | null, sample_rate: integer(spec.sample_rate ?? 48000, 'sample_rate', 8000, 192000), channels: integer(spec.channels ?? 2, 'channels', 1, 2), duration: number(spec.duration ?? 3, 'duration', .01, 30), buffer_size: integer(spec.buffer_size ?? 512, 'buffer_size', 16, 32768), timeout_seconds: number(spec.timeout_seconds ?? 30, 'timeout_seconds', 1, 300), parameters: params(spec.parameters ?? {}), cases: [] };
+  if (spec.native_host !== undefined) {
+    if (typeof spec.native_host !== 'string' || !spec.native_host.trim()) throw new Error('native_host must be a non-empty executable path');
+    out.native_host = expand(spec.native_host);
+  }
   Object.assign(out, controls(spec, out.duration, out.sample_rate));
   if (!Array.isArray(spec.cases) || spec.cases.length < 1 || spec.cases.length > 64) throw new Error('Plan requires 1..64 cases');
   const names = new Set<string>();
@@ -29,7 +34,8 @@ export function validate(value: unknown): Plan {
   return out;
 }
 export function preset(plugin: string, kind = 'effect') {
-  if (!['effect', 'generator'].includes(kind)) throw new Error('Preset must be effect or generator');
+  if (!['effect', 'generator', 'eq'].includes(kind)) throw new Error('Preset must be effect, generator or eq');
+  if (kind === 'eq') return { schema_version: 1, plugin, sample_rate: 48000, channels: 2, duration: 2, buffer_size: 512, timeout_seconds: 30, parameters: {}, cases: [{ id: 'impulse', stimulus: { kind: 'impulse', at_seconds: .25, level_dbfs: -18 } }, { id: 'noise', stimulus: { kind: 'noise', noise_rms_dbfs: -30, seed: 1729 } }, ...[100, 1000, 10000].map(frequency_hz => ({ id: `tone_${frequency_hz}`, stimulus: { kind: 'tone', frequency_hz, level_dbfs: -24 } }))] };
   const cases = kind === 'generator' ? [[60, 64], [60, 100], [60, 127], [72, 100]].map(([note, vel]) => ({ id: `note${note}_velocity${vel}`, stimulus: { kind: 'midi', midi: [{ time: .1, data: [144, note, vel] }, { time: 2, data: [128, note, 0] }] } })) : [
     ...['silence', 'impulse', 'tone', 'noise', 'sweep', 'step_tone'].map(k => ({ id: k, stimulus: { kind: k } })),
     { id: 'resonance', stimulus: { kind: 'resonance', probe_dbfs: -66 } }, { id: 'competition', stimulus: { kind: 'resonance', probe_dbfs: -66, competitor_hz: 1400 } },
@@ -70,28 +76,17 @@ export async function isolated(request: Request, directory: string, timeout: num
   if (!['ok', 'error'].includes(result.status)) throw new Error('Invalid worker response');
   return result;
 }
-function provenance(spec: Plan): Provenance {
+function provenance(spec: Plan, host?: ReturnType<typeof checkHost>): Provenance {
   const files: Record<string, string> = {};
   for (const item of spec.cases) if (item.stimulus.kind === 'wav') { const path = realpathSync(expand(item.stimulus.path!)); item.stimulus.path = path; files[path] = sha(path); }
   for (const item of [spec, ...spec.cases]) if (item.state_file) files[item.state_file] = sha(item.state_file);
-  return { input_files: files, tool_source_sha256: sourceHash(), ...(!spec.plugin.startsWith('builtin:') ? { native_host_sha256: sha(nativeHost()) } : {}) };
+  return { input_files: files, tool_source_sha256: sourceHash(), ...(host ? { native_host: host.path, native_host_sha256: sha(host.path) } : {}) };
 }
-export function artifactPath(directory: string, name: string): string {
-  if (name !== basename(name) || /[\\/]/.test(name) || ['.', '..'].includes(name)) throw new Error('Invalid artifact path');
-  const base = realpathSync(directory), path = realpathSync(join(directory, name));
-  if (path === base || !path.startsWith(base + sep) || isAbsolute(name)) throw new Error('Artifact escapes case directory');
-  return path;
-}
-export function verifyArtifacts(directory: string, entry: Entry) {
-  if (!entry.artifacts || !Object.keys(entry.artifacts).length) throw new Error('Missing artifact hashes');
-  for (const [name, expected] of Object.entries(entry.artifacts)) {
-    try { if (sha(artifactPath(directory, name)) === expected) continue; } catch { /* Missing or unsafe artifacts also invalidate the checkpoint. */ }
-    throw new Error(`Artifact checksum mismatch or missing file: ${entry.id}/${name}`);
-  }
-}
-export async function run(specPath: string, directory: string, resume = false, retryFailed = false): Promise<State> {
+export async function run(specPath: string, directory: string, resume = false, retryFailed = false, nativeHost?: string): Promise<State> {
   const spec = validate(load(specPath)), ident = identity(spec.plugin); spec.plugin = ident.path;
-  const origin = provenance(spec), fingerprint = digest({ spec, plugin: ident, provenance: origin });
+  if (nativeHost !== undefined) spec.native_host = expand(nativeHost);
+  const host = !spec.plugin.startsWith('builtin:') ? checkHost(spec.native_host, ['render', ...([spec, ...spec.cases].some(c => c.state_file || c.save_state) ? ['state' as const] : []), ...([spec, ...spec.cases].some(c => c.automation?.length) ? ['automation' as const] : [])]) : undefined;
+  const origin = provenance(spec, host), fingerprint = digest({ spec, plugin: ident, provenance: origin });
   directory = expand(directory); const checkpoint = join(directory, 'run.json');
   let state: State;
   if (resume) {
@@ -103,13 +98,13 @@ export async function run(specPath: string, directory: string, resume = false, r
   }
   for (const item of spec.cases) {
     const previous = state.cases.find(c => c.id === item.id), target = join(directory, 'cases', item.id);
-    if (previous?.status === 'ok') { verifyArtifacts(target, previous); continue; }
+    if (previous?.status === 'ok') { verifiedCase(directory, previous); continue; }
     if (previous && !retryFailed) throw new Error(`Case ${item.id} failed/interrupted; inspect logs before --retry-failed`);
     if (previous) { if (existsSync(target)) renameSync(target, `${target}-attempt-${Date.now()}-${process.hrtime.bigint()}`); state.cases.splice(state.cases.indexOf(previous), 1); }
     mkdirSync(dirname(target), { recursive: true }); mkdirSync(target);
     const entry: Entry = { id: item.id, status: 'running' }; state.status = 'running'; state.cases.push(entry); dump(checkpoint, state);
-    let result = await isolated({ operation: 'render', plugin: spec.plugin, plugin_name: spec.plugin_name, sample_rate: spec.sample_rate, channels: spec.channels, duration: spec.duration, buffer_size: spec.buffer_size, output: target, stimulus: item.stimulus, parameters: { ...spec.parameters, ...item.parameters }, state_file: item.state_file ?? spec.state_file, save_state: item.save_state ?? spec.save_state, automation: item.automation ?? spec.automation }, target, spec.timeout_seconds);
-    if (digest(identity(spec.plugin)) !== digest(ident) || digest(provenance(spec)) !== digest(origin)) result = { status: 'error', error_type: 'identity_changed', error: 'Plug-in, input or tool identity changed during execution; stop and investigate' };
+    let result = await isolated({ operation: 'render', plugin: spec.plugin, plugin_name: spec.plugin_name, ...(host ? { native_host: host.path, native_host_sha256: host.sha256 } : {}), sample_rate: spec.sample_rate, channels: spec.channels, duration: spec.duration, buffer_size: spec.buffer_size, output: target, stimulus: item.stimulus, parameters: { ...spec.parameters, ...item.parameters }, state_file: item.state_file ?? spec.state_file, save_state: item.save_state ?? spec.save_state, automation: item.automation ?? spec.automation }, target, spec.timeout_seconds);
+    if (digest(identity(spec.plugin)) !== digest(ident) || digest(provenance(spec, host)) !== digest(origin)) result = { status: 'error', error_type: 'identity_changed', error: 'Plug-in, input or tool identity changed during execution; stop and investigate' };
     dump(join(target, 'result.json'), result); entry.status = result.status; entry.result = result;
     const artifacts = ['request.json', 'response.json', 'result.json', 'stdout.log', 'stderr.log', 'audio.npz', 'traces.json', 'output.preview.wav', 'plugin-state.json'];
     entry.artifacts = Object.fromEntries(artifacts.filter(name => existsSync(join(target, name))).map(name => [name, sha(join(target, name))]));
@@ -118,15 +113,15 @@ export async function run(specPath: string, directory: string, resume = false, r
   }
   state.status = 'ok'; dump(checkpoint, state); report(directory); return state;
 }
-export async function inspect(plugin: string, directory: string, timeout = 30, pluginName?: string) {
+export async function inspect(plugin: string, directory: string, timeout = 30, pluginName?: string, nativeHost?: string) {
   number(timeout, 'timeout', 1, 300);
   directory = expand(directory); const ident = identity(plugin);
-  if (!ident.path.startsWith('builtin:')) nativeHost();
+  const host = !ident.path.startsWith('builtin:') ? checkHost(nativeHost, ['inspect']) : undefined;
   mkdirSync(dirname(directory), { recursive: true }); mkdirSync(directory);
-  const result = await isolated({ operation: 'inspect', plugin: ident.path, plugin_name: pluginName, output: directory, parameters: {} }, directory, timeout);
-  if (digest(identity(plugin)) !== digest(ident)) throw new Error('Plug-in changed during inspection');
-  dump(join(directory, 'inspection.json'), { identity: ident, ...result });
+  const result = await isolated({ operation: 'inspect', plugin: ident.path, plugin_name: pluginName, ...(host ? { native_host: host.path, native_host_sha256: host.sha256 } : {}), output: directory, parameters: {} }, directory, timeout);
+  if (digest(identity(plugin)) !== digest(ident) || host && sha(host.path) !== host.sha256) throw new Error('Plug-in or host changed during inspection');
+  dump(join(directory, 'inspection.json'), { identity: ident, ...(host ? { native_host: host } : {}), ...result });
   const parameters = result.plugin?.parameters, keys = Object.keys(parameters ?? {});
   const summary = result.plugin ? { ...result.plugin, parameters: Object.fromEntries(keys.slice(0, 16).map(key => [key, { ...parameters![key], value: typeof parameters![key].value === 'string' ? parameters![key].value.slice(0, 256) : parameters![key].value, ...(parameters![key].valid_values ? { valid_values: parameters![key].valid_values!.slice(0, 16).map(value => typeof value === 'string' ? value.slice(0, 128) : value), valid_values_truncated: parameters![key].valid_values!.length > 16 || parameters![key].valid_values_truncated } : {}) }])) } : undefined;
-  return { directory, identity: ident, ...result, ...(summary ? { plugin: summary, parameter_count: keys.length, parameters_truncated: keys.length > 16, inspection: join(directory, 'inspection.json') } : {}) };
+  return { directory, identity: ident, ...(host ? { native_host: host } : {}), ...result, ...(summary ? { plugin: summary, parameter_count: keys.length, parameters_truncated: keys.length > 16, inspection: join(directory, 'inspection.json') } : {}) };
 }

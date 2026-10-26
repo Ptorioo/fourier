@@ -1,13 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
-import { mkdtemp, rm, readFile } from 'node:fs/promises';
+import { mkdtemp, rm, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { packageRoot } from '../scripts/bridge.mjs';
 
-const host = process.env.PI_HOST_ROOT || (process.env.APPDATA ? join(process.env.APPDATA, 'npm/node_modules/@earendil-works/pi-coding-agent') : '/usr/local/lib/node_modules/@earendil-works/pi-coding-agent');
+const localHost = join(packageRoot, 'node_modules/@earendil-works/pi-coding-agent');
+const host = process.env.PI_HOST_ROOT || (existsSync(join(localHost, 'dist/core/extensions/loader.js')) ? localHost :
+  process.env.APPDATA ? join(process.env.APPDATA, 'npm/node_modules/@earendil-works/pi-coding-agent') : '/usr/local/lib/node_modules/@earendil-works/pi-coding-agent');
+const required = process.env.FOURIER_INTEGRATION === '1';
 const loaderPath = join(host, 'dist/core/extensions/loader.js');
 async function loadFourier() {
   const { loadExtensions } = await import(pathToFileURL(loaderPath).href);
@@ -22,12 +25,12 @@ async function loadFourier() {
     assert.ok(skillResult.skills[0].description.length > 20);
   }
   const tools = loaded.extensions[0].tools;
-  assert.equal(tools.size, 12);
+  assert.equal(tools.size, 15);
   assert.ok(loaded.extensions[0].commands.has('fourier'));
   return (name, args, ctx = { cwd: packageRoot }) => tools.get(name).definition.execute('test', args, new AbortController().signal, undefined, ctx);
 }
 
-test('actual Pi loader registers and executes Fourier tools', { skip: !existsSync(loaderPath) && 'Set PI_HOST_ROOT to run the real Pi loader test' }, async () => {
+test('actual Pi loader registers and executes Fourier tools', { skip: !required && !existsSync(loaderPath) && 'Install Pi dev dependencies or set PI_HOST_ROOT to run the real Pi loader test' }, async () => {
   const invoke = await loadFourier();
   const doctor = await invoke('fourier_doctor', {}, { cwd: packageRoot });
   assert.equal(JSON.parse(doctor.content[0].text).audio_ready, true);
@@ -38,6 +41,24 @@ test('actual Pi loader registers and executes Fourier tools', { skip: !existsSyn
     const output = join(directory, 'run');
     const result = await invoke('fourier_run', { spec_path: plan, out_directory: output }, { cwd: packageRoot });
     assert.equal(JSON.parse(result.content[0].text).completed, 8);
+    await invoke('fourier_report', { run_directory: output });
+    const checkpoint = join(output, 'run.json'), original = await readFile(checkpoint, 'utf8');
+    const tampered = JSON.parse(original); tampered.cases[0].result.metrics.gain_db = 123;
+    await writeFile(checkpoint, JSON.stringify(tampered));
+    await assert.rejects(invoke('fourier_report', { run_directory: output }), /differs from checkpoint/);
+    await writeFile(checkpoint, original);
+    const unavailable = await invoke('fourier_doctor', { native_host: join(directory, 'missing-helper') });
+    assert.equal(JSON.parse(unavailable.content[0].text).plugins_ready, false);
+    const eq = JSON.parse((await invoke('fourier_eq', { run_directory: output, out_directory: join(directory, 'eq'), case_ids: ['impulse'], frequencies_hz: [1000] })).content[0].text);
+    assert.ok(Math.abs(eq.cases[0].maximum.gain_db) < .001);
+    const checks = [{ case_id: 'tone', metric: 'tone_gain_db', min: -.001, max: .001 }];
+    const checked = await invoke('fourier_verify', { run_directory: output, out_directory: join(directory, 'verified'), checks });
+    assert.equal(JSON.parse(checked.content[0].text).passed, true);
+    await assert.rejects(invoke('fourier_verify', { run_directory: output, out_directory: join(directory, 'failed'), checks: [{ case_id: 'tone', metric: 'tone_gain_db', min: 3 }] }), /verification.json/);
+    const identificationSuite = join(directory, 'eq-identification.json');
+    await invoke('fourier_eq_identify', { action: 'create', plugin: 'builtin:gain', out_file: identificationSuite, neutral_parameters: { gain_db: 0 }, bands: [{ id: 'test', parameters: { gain_db: 6 } }], duration: .5, channels: 1, families: ['bell'], stages: [1] });
+    const identified = await invoke('fourier_eq_identify', { action: 'run', suite: identificationSuite, out_directory: join(directory, 'identified') });
+    assert.equal(JSON.parse(identified.content[0].text).fits, 1);
     const controlled = join(directory, 'controlled.json');
     await invoke('fourier_plan', {
       plugin: 'builtin:gain', preset: 'effect', out_file: controlled, duration: .3, parameters: { gain_db: -3 },
@@ -97,7 +118,7 @@ test('actual Pi loader registers and executes Fourier tools', { skip: !existsSyn
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
 
-test('JUCE scaffolding and validation through the actual Pi tools', { skip: !existsSync(loaderPath) }, async () => {
+test('JUCE scaffolding and validation through the actual Pi tools', { skip: !required && !existsSync(loaderPath) }, async () => {
   const invoke = await loadFourier();
   const directory = await mkdtemp(join(tmpdir(), 'fourier-juce project-'));
   try {
@@ -119,8 +140,11 @@ test('JUCE scaffolding and validation through the actual Pi tools', { skip: !exi
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
 
-test('opt-in native JUCE effect and instrument build/inspect/render through Pi tools', { skip: !process.env.FOURIER_JUCE_PATH, timeout: 2_200_000 }, async () => {
+test('opt-in native JUCE effect and instrument build/inspect/render through Pi tools', { skip: !required && !process.env.FOURIER_JUCE_PATH, timeout: 2_200_000 }, async () => {
+  assert.ok(process.env.FOURIER_JUCE_PATH, 'Set FOURIER_JUCE_PATH to a trusted local JUCE checkout for the required integration suite');
   const invoke = await loadFourier();
+  const readiness = JSON.parse((await invoke('fourier_doctor', {})).content[0].text);
+  assert.equal(readiness.plugins_ready, true, readiness.host_error || 'Build the current native host with npm run setup:native first');
   const directory = join(packageRoot, '.fourier', `juce-native-${Date.now()}`);
   for (const kind of ['effect', 'instrument']) {
     const project = join(directory, kind);

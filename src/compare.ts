@@ -1,22 +1,18 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { loadAudio } from './archive.js';
-import { arraySha, digest, dump, expand, fields, legacyRunFingerprint, load, number, sha } from './io.js';
+import { arraySha, dump, expand, fields, load, number, sha } from './io.js';
 import { amplitude, db, spectrum, stats } from './measure.js';
-import { safeId, verifyArtifacts } from './runner.js';
+import { safeId, verifiedCase, verifiedRun } from './integrity.js';
 import type { Audio, Result, Samples, State } from './types.js';
 
 export function archive(directory: string, caseId: string) {
-  const state = load<State>(join(directory, 'run.json'));
+  const state = verifiedRun(directory);
   if (state.status !== 'ok' || state.kind !== 'measurements') throw new Error('Comparison requires a completed measurement run');
-  const fingerprint = digest({ spec: state.spec, plugin: state.identity, provenance: state.provenance });
-  if (state.fingerprint !== fingerprint && state.fingerprint !== legacyRunFingerprint(join(directory, 'run.json'))) throw new Error('Run fingerprint mismatch');
   if (!safeId(caseId)) throw new Error('Invalid comparison case ID');
   const entry = state.cases.find(c => c.id === caseId), folder = join(directory, 'cases', caseId);
   if (!entry || entry.status !== 'ok' || !entry.artifacts?.['audio.npz'] || !entry.artifacts['result.json']) throw new Error(`Missing successful archived case: ${caseId}`);
-  verifyArtifacts(folder, entry);
-  const result = load<Result>(join(folder, 'result.json'));
-  if (digest(result) !== digest(entry.result)) throw new Error('Case result differs from checkpoint');
+  const result = verifiedCase(directory, entry);
   const { input, output, sample_rate: sr } = loadAudio(join(folder, 'audio.npz'));
   if (input[0].length < 32 || output[0].length < 32 || input.length !== output.length || output[0].length > input[0].length || sr !== state.spec.sample_rate) throw new Error('Comparison audio shape/sample rate mismatch');
   if (arraySha(input) !== result.input_sha256 || arraySha(output) !== result.output_sha256) throw new Error('Audio array checksum mismatch');
@@ -32,7 +28,7 @@ export function aligned(x: Audio, y: Audio, lag: number): [Audio, Audio] {
 function windowed(x: Samples, offset: number, n: number): [Float64Array, Float64Array] {
   return spectrum(Float64Array.from({ length: n }, (_, i) => x[offset + i] * (.5 - .5 * Math.cos(2 * Math.PI * i / (n - 1)))));
 }
-function response(x: Samples, y: Samples, sr: number, frequencies: number[]) {
+export function response(x: Samples, y: Samples, sr: number, frequencies: number[]) {
   const n = Math.min(8192, x.length), bins = Math.floor(n / 2) + 1, px = new Float64Array(bins), py = new Float64Array(bins), cr = new Float64Array(bins), ci = new Float64Array(bins);
   let segments = 0;
   for (let s = 0; s + n <= x.length; s += Math.floor(n / 2)) {

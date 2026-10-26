@@ -19,7 +19,12 @@ Fourier's CLI, measurements, plans and reports run in TypeScript on **Node 22.2+
 Run `npm run setup` in the package directory to compile the backend; no Python,
 Pedalboard or virtual environment is used. Generating/building a project and
 hosting its compiled plug-in are separate operations. Before native inspection
-or rendering, check `fourier_doctor().plugins_ready`. Build the optional C++ JUCE
+or rendering, check `fourier_doctor().plugins_ready` and the separate `state_ready`/
+`automation_ready` flags when needed. The check queries the helper protocol, not
+just file presence, without loading a plug-in. Pass explicit `native_host` (CLI
+`--native-host`) to doctor/inspection/plans/runs/suites when selecting an external
+helper; explicit selections override defaults and never silently fall back.
+Build the optional C++ JUCE
 host with `npm run setup:native -- --juce /absolute/path/to/JUCE` (optionally
 `--generator Ninja` from a compiler developer shell), or set `FOURIER_NATIVE_HOST`
 to a compatible `fourier-host` executable. This uses the operator's local trusted
@@ -56,7 +61,13 @@ calibration and PCM WAV analysis work without the helper.
    polyBLEP saw/square, one-pole non-resonant low-pass, ADSR, ±2-semitone pitch bend
    and CC1 vibrato; sine retains fixed ADSR/no bend. No MPE, production-quality
    model or proprietary code is implied. Read generated README for smoothing,
-   latency/tail and quality limits. Add only requested controls/DSP.
+   latency/tail and quality limits. Add only requested controls/DSP. There is no
+   need for a separate GUI builder. If the target being recreated has response
+   curves or a spectral analyzer, implement those inside the VST's editor, not
+   only a generic parameter panel. For a custom editor, share DSP/display
+   coefficients, use APVTS attachments, and keep FFT/painting on the message
+   thread with a bounded audio-to-editor FIFO. No custom-editor example is
+   included. Do not copy vendor assets.
 5. Call `fourier_juce({action:"build", project_directory:"...", juce_path:"..."})`.
    Optional: `configuration` (`Debug`/`Release`), `generator`, `jobs` (1–32,
    default 2), and `timeout_seconds` (10–3600, default 1800 for the whole operation).
@@ -74,7 +85,7 @@ calibration and PCM WAV analysis work without the helper.
    name, index and normalized `raw_value` are recorded for verification. Only
    writable/automatable controls are listed, not read-only MIDI controller proxies.
    Built-ins such as `builtin:gain` instead keep physical `gain_db` values.
-   Create a fresh `fourier_plan` with `preset:"effect"` or `preset:"generator"`
+   Create a fresh `fourier_plan` with `preset:"effect"`, `preset:"generator"` or `preset:"eq"`
    and run it in a new directory. Old Pedalboard plans are not native JUCE plans. Loading this build executes native code. Start with silence,
    known gains, impulses and seeded signals. Instruments need empty-MIDI, note-on,
    note-off/release and polyphony cases. Use `fourier_compare` on known/held-out
@@ -88,16 +99,23 @@ calibration and PCM WAV analysis work without the helper.
    suites with explicit candidate mappings; `fit` searches a bounded grid and
    scores held-out IDs only after choosing the winner. Use `fourier_characterize`
    for offline dynamics, coherent THD/selected IMD and impulse energy-decay fits.
+   Use `fourier_eq` for verified impulse/noise response curves, `fourier_verify`
+   for declarative regression bounds, and `fourier_eq_identify` for explicit
+   isolated-band RBJ-surrogate/control-law experiments. These tools replace
+   routine ad hoc report-parsing scripts, not independent reference validation.
    Read the audio-analysis skill/README for bounds and measurement caveats.
 
 The build tool accepts generated projects with `fourier-project.json`; it is not
 an arbitrary CMake command runner. If renaming a target, update the manifest's
 `name` too. Keep generated source editable; never regenerate over a user's DSP.
-If only the skill is installed, resolve `../../scripts/fourier.mjs` relative to
-this file and use `node <script> juce <action> --options-stdin` with a JSON object
-on stdin. The CLI has the launcher's 10-minute outer limit; Pi's build tool uses
-its explicit whole-operation time limit. It is fine to run trusted CMake directly
-from a developer shell as documented by the generated README.
+Inside Pi, use `fourier_juce` and the other structured `fourier_*` tools for
+Fourier operations, not shell calls to `fourier.mjs` or handwritten argument
+lists. If only this skill is installed, ask the user to install/reload the
+extension. Tool errors must not fall back to CLI execution. The standalone CLI
+is for explicitly requested non-Pi/CLI workflows; see the package README. Its
+outer limit is 10 minutes, while Pi's build tool uses its explicit whole-operation
+time limit. Normal source editing and explicitly requested trusted CMake builds
+in a developer shell remain appropriate.
 
 The TypeScript worker supervises each native render under the runner's deadline;
 cancellation terminates its process tree best-effort and keeps checkpoint/logs.

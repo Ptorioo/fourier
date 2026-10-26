@@ -1,7 +1,10 @@
 .fourier/
+.pi/
+.vscode/
 runs/
 node_modules/
 *.tgz
 .DS_Store
 build/
 dist/
+package/

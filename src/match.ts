@@ -37,7 +37,7 @@ export async function match(action: string, raw: unknown) {
   if (action === 'create') {
     const o = fields(raw, ['reference_plan', 'candidate', 'held_out_case_ids', 'candidate_lag_samples', 'out'], 'suite create');
     if (typeof o.reference_plan !== 'string' || typeof o.out !== 'string') throw new Error('reference_plan and out paths required');
-    const reference = validate(load(expand(o.reference_plan))), c = fields(o.candidate, ['plugin', 'plugin_name', 'parameters', 'case_parameters', 'case_controls', 'state_file', 'save_state', 'automation'], 'candidate');
+    const reference = validate(load(expand(o.reference_plan))), c = fields(o.candidate, ['plugin', 'plugin_name', 'parameters', 'case_parameters', 'case_controls', 'state_file', 'save_state', 'automation', 'native_host'], 'candidate');
     if (typeof c.plugin !== 'string' || !c.plugin) throw new Error('Explicit candidate plugin required');
     const caseControls = object(c.case_controls ?? {}, 'case_controls');
     for (const [id, control] of Object.entries(caseControls)) { if (!reference.cases.some(item => item.id === id)) throw new Error('Unknown candidate case control ID'); fields(control, ['state_file', 'save_state', 'automation'], 'candidate case control'); }
@@ -45,15 +45,19 @@ export async function match(action: string, raw: unknown) {
     if (Object.keys(cases).some(id => !reference.cases.some(item => item.id === id))) throw new Error('Unknown candidate case parameter ID');
     // Never carry a reference plug-in state or parameter keys into a different candidate implicitly.
     const { case_parameters: _caseParameters, case_controls: _caseControls, ...candidateOptions } = c;
-    const candidate = validate({ ...reference, ...candidateOptions, plugin_name: c.plugin_name ?? null, cases: reference.cases.map(item => ({ id: item.id, stimulus: item.stimulus, parameters: cases[item.id] ?? {}, ...object(caseControls[item.id] ?? {}, 'case control') })),  parameters: c.parameters ?? {}, state_file: c.state_file, save_state: c.save_state, automation: c.automation });
+    const candidate = validate({ ...reference, ...candidateOptions, plugin_name: c.plugin_name ?? null, cases: reference.cases.map(item => ({ id: item.id, stimulus: item.stimulus, parameters: cases[item.id] ?? {}, ...object(caseControls[item.id] ?? {}, 'case control') })),  parameters: c.parameters ?? {}, state_file: c.state_file, save_state: c.save_state, automation: c.automation, native_host: c.native_host });
     const value = suite({ schema_version: 1, reference, candidate, held_out_case_ids: o.held_out_case_ids, candidate_lag_samples: o.candidate_lag_samples }), target = expand(o.out);
     mkdirSync(dirname(target), { recursive: true }); writeFileSync(target, stringify(value, 2) + '\n', { flag: 'wx' });
     return { status: 'ok', suite: target, cases: reference.cases.length, held_out_case_ids: value.held_out_case_ids };
   }
   if (action !== 'run' && action !== 'fit') throw new Error('match action must be create, run or fit');
-  const o = fields(raw, action === 'fit' ? ['suite', 'out', 'grid'] : ['suite', 'out'], 'suite execution');
+  const o = fields(raw, action === 'fit' ? ['suite', 'out', 'grid', 'native_host'] : ['suite', 'out', 'native_host'], 'suite execution');
   if (typeof o.suite !== 'string' || typeof o.out !== 'string') throw new Error('suite and out paths required');
   const specPath = expand(o.suite), s = suite(load(specPath)), root = expand(o.out), all = s.reference.cases.map(c => c.id), train = all.filter(id => !s.held_out_case_ids.includes(id));
+  if (o.native_host !== undefined) {
+    if (typeof o.native_host !== 'string' || !o.native_host.trim()) throw new Error('native_host must be a non-empty executable path');
+    s.reference.native_host = s.candidate.native_host = expand(o.native_host);
+  }
   let combinations: Record<string, Scalar>[] = [{}];
   if (action === 'fit') {
     const grid = object(o.grid, 'grid'), entries = Object.entries(grid);

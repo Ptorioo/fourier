@@ -1,0 +1,38 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { buildBackend } from '../scripts/build.mjs';
+import { packageRoot } from '../scripts/bridge.mjs';
+
+test('Pi/CLI bridge builds missing or stale output, including equal-mtime edits, and never launches after build failure', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'fourier-build-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  for (const directory of ['src', 'scripts']) mkdirSync(join(root, directory));
+  for (const name of ['bridge.mjs', 'build.mjs', 'fourier.mjs']) copyFileSync(join(packageRoot, 'scripts', name), join(root, 'scripts', name));
+  symlinkSync(join(packageRoot, 'node_modules'), join(root, 'node_modules'), 'junction');
+  writeFileSync(join(root, 'package.json'), '{"type":"module"}');
+  writeFileSync(join(root, 'tsconfig.json'), JSON.stringify({ compilerOptions: { target: 'ES2023', module: 'NodeNext', types: [], skipLibCheck: true } }));
+  writeFileSync(join(root, 'tsconfig.build.json'), JSON.stringify({ extends: './tsconfig.json', compilerOptions: { rootDir: 'src', outDir: 'dist' }, include: ['src/**/*.ts'] }));
+  const source = join(root, 'src', 'cli.ts'), compiled = join(root, 'dist', 'cli.js');
+  writeFileSync(source, 'console.log("first");');
+  const bridge = await import(pathToFileURL(join(root, 'scripts', 'bridge.mjs')).href);
+  const first = await bridge.runBackend([]); assert.equal(first.code, 0); assert.equal(first.stdout.trim(), 'first');
+  const stamp = join(root, 'dist', '.build.json'), initial = statSync(stamp).mtimeMs;
+  await buildBackend(root); assert.equal(statSync(stamp).mtimeMs, initial, 'unchanged backend needs no compiler');
+  const times = statSync(source); writeFileSync(source, 'console.log("second");'); utimesSync(source, times.atime, times.mtime);
+  const second = await bridge.runBackend([]); assert.equal(second.stdout.trim(), 'second');
+  rmSync(compiled); await Promise.all([buildBackend(root), buildBackend(root)]); assert.ok(existsSync(compiled));
+  writeFileSync(compiled, 'console.log("stale");');
+  const cli = () => spawnSync(process.execPath, [join(root, 'scripts', 'fourier.mjs')], { cwd: root, encoding: 'utf8', timeout: 30000 });
+  const repaired = cli(); assert.equal(repaired.status, 0, repaired.stderr); assert.equal(repaired.stdout.trim(), 'second');
+  writeFileSync(source, 'const broken: number = "not a number"; console.log("must not launch");');
+  await assert.rejects(bridge.runBackend([]), /backend build failed/);
+  const failed = cli(); assert.equal(failed.status, 1); assert.match(failed.stderr, /backend build failed/); assert.equal(failed.stdout, '');
+  assert.match(readFileSync(compiled, 'utf8'), /second/);
+  rmSync(join(root, 'node_modules'));
+  await assert.rejects(bridge.runBackend([]), /Install build dependencies/);
+});

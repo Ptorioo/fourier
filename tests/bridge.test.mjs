@@ -47,6 +47,12 @@ test('arguments are not interpreted as shell commands', async () => {
   assert.notEqual(result.code, 0);
   assert.match(result.stdout, /Unknown command/);
 });
+test('required integration command fails instead of skipping without a JUCE checkout', () => {
+  const result = spawnSync(process.execPath, [join(packageRoot, 'scripts/test-integration.mjs')], {
+    env: { ...process.env, FOURIER_JUCE_PATH: '' }, encoding: 'utf8', timeout: 10000,
+  });
+  assert.equal(result.status, 1); assert.match(result.stderr, /Required integration suite needs FOURIER_JUCE_PATH/);
+});
 test('already-aborted operations do not launch', async () => {
   const controller = new AbortController(); controller.abort();
   await assert.rejects(runBackend(['doctor'], { signal: controller.signal }), /cancelled before launch/);

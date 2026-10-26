@@ -3,6 +3,7 @@ import { defineTool, type ExtensionAPI } from '@earendil-works/pi-coding-agent';
 import { resolve } from 'node:path';
 import { runBackend, resultText } from '../scripts/bridge.mjs';
 import { callRea, saveReaEvidence } from '../scripts/rea.mjs';
+import { verificationMetrics } from './verify.js';
 
 const text = (value: string) => ({ content: [{ type: 'text' as const, text: value }], details: {} });
 async function invoke(args: string[], cwd: string, signal?: AbortSignal, input?: unknown, timeoutMs?: number) {
@@ -35,6 +36,8 @@ const stimulus = Type.Object({
   probe_kind: Type.Optional(Type.Union([Type.Literal('tone'), Type.Literal('noise')])), path: Type.Optional(Type.String()),
   midi: Type.Optional(Type.Array(Type.Object({ time: Type.Number({ minimum: 0 }), data: Type.Array(Type.Integer({ minimum: 0, maximum: 255 }), { minItems: 2, maxItems: 3 }) }), { maxItems: 256 })),
 });
+const hostFields = { native_host: Type.Optional(Type.String({ description: 'Explicit helper executable; overrides plan, FOURIER_NATIVE_HOST and package default. Capability-checked before plug-in loading.' })) };
+const hostArgs = (p: { native_host?: string }) => p.native_host === undefined ? [] : ['--native-host', p.native_host];
 const pair = Type.Array(Type.Number({ minimum: 0 }), { minItems: 2, maxItems: 2 });
 
 export default function fourier(pi: ExtensionAPI) {
@@ -49,14 +52,14 @@ export default function fourier(pi: ExtensionAPI) {
   pi.registerCommand('fourier', {
     description: 'Show Fourier audio-analysis, JUCE authoring and optional REA tools',
     handler: async (_args, ctx) => {
-      ctx.ui.notify('Fourier: /skill:audio-analysis · /skill:juce-development · fourier_doctor, discover, inspect, plan, run, analyze, compare, characterize, match, report, rea, juce. Setup: npm run setup. JUCE uses a local SDK; builds execute trusted source. REA runtime instrumentation needs separate approval.', 'info');
+      ctx.ui.notify('Fourier: use structured tools directly, not fourier.mjs shell commands. /skill:audio-analysis · /skill:juce-development · fourier_doctor, discover, inspect, plan, run, analyze, compare, characterize, eq, eq_identify, verify, match, report, rea, juce. Setup: npm run setup. JUCE uses a local SDK; builds execute trusted source. REA runtime instrumentation needs separate approval.', 'info');
     },
   });
   pi.registerTool(defineTool({
     name: 'fourier_doctor', label: 'Fourier environment',
-    description: 'Check Node and the optional compiled JUCE host without loading any plug-in. No installs or network calls.',
-    parameters: Type.Object({}),
-    execute: async (_id, _params, signal, _update, ctx) => invoke(['doctor'], ctx.cwd, signal),
+    description: 'Check Node and the selected JUCE host protocol and inspect/render/state/automation capabilities without loading any plug-in. No installs or network calls.',
+    parameters: Type.Object(hostFields),
+    execute: async (_id, p, signal, _update, ctx) => invoke(['doctor', ...hostArgs(p)], ctx.cwd, signal),
   }));
   pi.registerTool(defineTool({
     name: 'fourier_discover', label: 'Discover audio plug-ins',
@@ -67,15 +70,15 @@ export default function fourier(pi: ExtensionAPI) {
   pi.registerTool(defineTool({
     name: 'fourier_inspect', label: 'Inspect plug-in parameters',
     description: 'Load an explicitly selected installed plug-in in a disposable native worker; save exact parameter names/readbacks and identity. This executes third-party code, NOT a security sandbox.',
-    parameters: Type.Object({ plugin: Type.String(), out_directory: Type.String(), plugin_name: Type.Optional(Type.String()), timeout_seconds: Type.Optional(Type.Number({ minimum: 1, maximum: 300 })) }),
-    execute: async (_id, p, signal, _update, ctx) => invoke(['inspect', '--plugin', p.plugin, '--out', p.out_directory, '--timeout', String(p.timeout_seconds || 30), ...(p.plugin_name ? ['--plugin-name', p.plugin_name] : [])], ctx.cwd, signal),
+    parameters: Type.Object({ plugin: Type.String(), out_directory: Type.String(), plugin_name: Type.Optional(Type.String()), timeout_seconds: Type.Optional(Type.Number({ minimum: 1, maximum: 300 })), ...hostFields }),
+    execute: async (_id, p, signal, _update, ctx) => invoke(['inspect', '--plugin', p.plugin, '--out', p.out_directory, '--timeout', String(p.timeout_seconds || 30), ...(p.plugin_name ? ['--plugin-name', p.plugin_name] : []), ...hostArgs(p)], ctx.cwd, signal),
   }));
   pi.registerTool(defineTool({
     name: 'fourier_plan', label: 'Create audio analysis plan',
     description: 'Create and validate a non-overwriting experiment plan directly from tool arguments; no manual JSON editing or plug-in loads. Inspect first for exact parameter names. Native numeric values are normalized [0,1]; strings must exactly match formatted values. Built-in parameters retain physical units. Omit cases for preset stimuli, or supply controlled cases with per-case parameter overrides. Resonance supports a continuous quiet right-channel noise probe and gated left tones for linking/release tests. Multitone supports 1–32 independently gated/phased/routed components for competition, history, intermodulation and stereo tests; no normalization.',
     parameters: Type.Object({
-      plugin: Type.String(), preset: Type.Union([Type.Literal('effect'), Type.Literal('generator')]), out_file: Type.String(),
-      plugin_name: Type.Optional(Type.String()), parameters: Type.Optional(parameters), ...controlFields,
+      plugin: Type.String(), preset: Type.Union([Type.Literal('effect'), Type.Literal('generator'), Type.Literal('eq')]), out_file: Type.String(),
+      plugin_name: Type.Optional(Type.String()), parameters: Type.Optional(parameters), ...controlFields, ...hostFields,
       sample_rate: Type.Optional(Type.Integer({ minimum: 8000, maximum: 192000 })), channels: Type.Optional(Type.Integer({ minimum: 1, maximum: 2 })),
       duration: Type.Optional(Type.Number({ minimum: 0.01, maximum: 30 })), buffer_size: Type.Optional(Type.Integer({ minimum: 16, maximum: 32768 })),
       timeout_seconds: Type.Optional(Type.Number({ minimum: 1, maximum: 300 })),
@@ -89,8 +92,8 @@ export default function fourier(pi: ExtensionAPI) {
   pi.registerTool(defineTool({
     name: 'fourier_run', label: 'Run plug-in measurements',
     description: 'Execute a validated JSON plan, one fresh process per case. Writes checkpoints, unnormalized float archives, preview WAVs, parameter readbacks, JSON/Markdown/SVG reports. Stops on first failure. New output directory required unless explicit resume; failed cases need explicit retry approval.',
-    parameters: Type.Object({ spec_path: Type.String(), out_directory: Type.String(), resume: Type.Optional(Type.Boolean()), retry_failed: Type.Optional(Type.Boolean()) }),
-    execute: async (_id, p, signal, _update, ctx) => invoke(['run', '--spec', p.spec_path, '--out', p.out_directory, ...(p.resume ? ['--resume'] : []), ...(p.retry_failed ? ['--retry-failed'] : [])], ctx.cwd, signal),
+    parameters: Type.Object({ spec_path: Type.String(), out_directory: Type.String(), resume: Type.Optional(Type.Boolean()), retry_failed: Type.Optional(Type.Boolean()), ...hostFields }),
+    execute: async (_id, p, signal, _update, ctx) => invoke(['run', '--spec', p.spec_path, '--out', p.out_directory, ...(p.resume ? ['--resume'] : []), ...(p.retry_failed ? ['--retry-failed'] : []), ...hostArgs(p)], ctx.cwd, signal),
   }));
   pi.registerTool(defineTool({
     name: 'fourier_analyze', label: 'Analyze rendered audio',
@@ -118,13 +121,42 @@ export default function fourier(pi: ExtensionAPI) {
   }));
   pi.registerTool(defineTool({
     name: 'fourier_report', label: 'Rebuild audio report',
-    description: 'Rebuild Markdown/JSON/SVG report from a checkpoint, without loading the plug-in. REA evidence stays separate from measured DSP facts.',
+    description: 'Verify checkpoint fingerprint, case artifacts and saved results before rebuilding Markdown/JSON/SVG reports; refuse changed evidence. No plug-in loads. REA evidence stays separate from measured DSP facts.',
     parameters: Type.Object({ run_directory: Type.String() }),
     execute: async (_id, p, signal, _update, ctx) => invoke(['report', '--run', p.run_directory], ctx.cwd, signal),
   }));
+  registerEqTools(pi);
   registerMatchingTools(pi);
   registerReaTool(pi);
   registerJuceTool(pi);
+}
+
+function registerEqTools(pi: ExtensionAPI) {
+  pi.registerTool(defineTool({
+    name: 'fourier_eq_identify', label: 'Identify isolated EQ models and control mappings',
+    description: 'Create/run/analyze reusable isolated-band impulse experiments. Supply exact inspected parameter names, neutral controls and band isolation explicitly. Fits best tested RBJ families and 1–4 repeated biquad stages, reports magnitude/phase residuals, ambiguity and held-out frequencies. Sweeps produce control lookup samples and local linear/exponential/power-law hypotheses with held-out control checks. Not unique recovery of proprietary internals; unsupported/time-varying shapes can fail fit thresholds. Create loads no plug-in; run executes trusted plug-ins, archives every case, and stops on first failure without retries.',
+    parameters: Type.Object({ action: Type.Union(['create', 'run', 'analyze'].map(k => Type.Literal(k))),
+      out_file: Type.Optional(Type.String()), suite: Type.Optional(Type.String()), out_directory: Type.Optional(Type.String()), run_directory: Type.Optional(Type.String()),
+      plugin: Type.Optional(Type.String()), plugin_name: Type.Optional(Type.String()), ...hostFields,
+      neutral_parameters: Type.Optional(parameters), bands: Type.Optional(Type.Array(Type.Object({ id: Type.String(), parameters, controls: Type.Optional(Type.Array(Type.Object({ parameter: Type.String(), values: Type.Array(Type.Union([Type.String(), Type.Number(), Type.Boolean()]), { minItems: 2, maxItems: 8 }), held_out_indices: Type.Optional(Type.Array(Type.Integer({ minimum: 0, maximum: 7 }), { maxItems: 6 })) }), { maxItems: 4 })) }), { minItems: 1, maxItems: 7 })),
+      families: Type.Optional(Type.Array(Type.Union(['bell', 'low_shelf', 'high_shelf', 'low_pass', 'high_pass', 'notch', 'band_pass'].map(k => Type.Literal(k))), { minItems: 1, maxItems: 7 })), stages: Type.Optional(Type.Array(Type.Integer({ minimum: 1, maximum: 4 }), { minItems: 1, maxItems: 4 })),
+      sample_rate: Type.Optional(Type.Integer({ minimum: 8000, maximum: 192000 })), channels: Type.Optional(Type.Integer({ minimum: 1, maximum: 2 })), duration: Type.Optional(Type.Number({ minimum: .5, maximum: 10 })), buffer_size: Type.Optional(Type.Integer({ minimum: 16, maximum: 32768 })), timeout_seconds: Type.Optional(Type.Number({ minimum: 1, maximum: 300 })), channel: Type.Optional(Type.Integer({ minimum: 0, maximum: 1 })),
+      deadline_seconds: Type.Optional(Type.Integer({ minimum: 10, maximum: 7200, description: 'Whole workflow deadline; default 1800 seconds.' })),
+    }),
+    execute: async (_id, p, signal, _update, ctx) => { const { action, deadline_seconds, ...options } = p; return invoke(['eq-identify', action, '--options-stdin'], ctx.cwd, signal, options, (deadline_seconds ?? 1800) * 1000); },
+  }));
+  pi.registerTool(defineTool({
+    name: 'fourier_eq', label: 'Characterize EQ response',
+    description: 'Offline EQ magnitude/wrapped-phase curves and measured grid extrema from 1–16 verified impulse/noise archives. No plug-in loads, inferred topology or automatic alignment. Impulse uses raw FFT ratios; noise uses steady H1/coherence. Writes eq.json in a new directory. Use fourier_plan preset eq for reusable stimuli.',
+    parameters: Type.Object({ run_directory: Type.String(), out_directory: Type.String(), case_ids: Type.Optional(Type.Array(Type.String(), { minItems: 1, maxItems: 16 })), frequencies_hz: Type.Optional(Type.Array(Type.Number({ minimum: 1 }), { minItems: 1, maxItems: 256 })), channel: Type.Optional(Type.Integer({ minimum: 0, maximum: 1 })), lag_samples: Type.Optional(Type.Integer()) }),
+    execute: async (_id, p, signal, _update, ctx) => { const { run_directory, out_directory, ...options } = p; return invoke(['eq', '--run', run_directory, '--out', out_directory, '--options-stdin'], ctx.cwd, signal, options); },
+  }));
+  pi.registerTool(defineTool({
+    name: 'fourier_verify', label: 'Check archived measurements against tolerances',
+    description: 'Evaluate 1–128 declarative inclusive min/max checks against verified measurement archives; missing/unexcited values fail. Metrics include tone/EQ gain, phase, output level/DC/clipping, latency and explicit aligned candidate error. No plug-in loads or inferred alignment. Writes verification.json; failed checks return an error with report path. Exact candidate null passes an upper dB error bound; silent reference is undefined.',
+    parameters: Type.Object({ run_directory: Type.String(), out_directory: Type.String(), candidate_run: Type.Optional(Type.String()), lag_samples: Type.Optional(Type.Integer()), candidate_lag_samples: Type.Optional(Type.Integer()), checks: Type.Array(Type.Object({ case_id: Type.String(), metric: Type.Union(verificationMetrics.map(k => Type.Literal(k))), channel: Type.Optional(Type.Integer({ minimum: 0, maximum: 1 })), frequency_hz: Type.Optional(Type.Number({ minimum: 1 })), min: Type.Optional(Type.Number()), max: Type.Optional(Type.Number()) }), { minItems: 1, maxItems: 128 }) }),
+    execute: async (_id, p, signal, _update, ctx) => { const { run_directory, out_directory, ...options } = p; return invoke(['verify', '--run', run_directory, '--out', out_directory, '--options-stdin'], ctx.cwd, signal, options); },
+  }));
 }
 
 function registerMatchingTools(pi: ExtensionAPI) {
@@ -133,8 +165,8 @@ function registerMatchingTools(pi: ExtensionAPI) {
     description: 'Create a reusable suite from a reference plan and explicit candidate parameters/state/automation; reference controls never implicitly carry across. Run both plans or fit 1–3 parameter grids (<=8 values each, <=32 candidates, bounded audio budget) against archived sample error with explicit candidate lag only. Optional held-out case IDs are excluded from selection. Saves all trials/readbacks and full comparisons for best tested candidate. New directories, fail-stop, no implicit retries, normalization, inferred mapping or perceptual-equivalence claim. Executes trusted plug-ins; can take many renders.',
     parameters: Type.Object({
       action: Type.Union(['create', 'run', 'fit'].map(k => Type.Literal(k))), out: Type.String(),
-      reference_plan: Type.Optional(Type.String()), suite: Type.Optional(Type.String()),
-      candidate: Type.Optional(Type.Object({ plugin: Type.String(), plugin_name: Type.Optional(Type.String()), parameters: Type.Optional(parameters), case_parameters: Type.Optional(Type.Record(Type.String(), parameters)), case_controls: Type.Optional(Type.Record(Type.String(), Type.Object(controlFields))), ...controlFields })),
+      reference_plan: Type.Optional(Type.String()), suite: Type.Optional(Type.String()), ...hostFields,
+      candidate: Type.Optional(Type.Object({ plugin: Type.String(), plugin_name: Type.Optional(Type.String()), parameters: Type.Optional(parameters), case_parameters: Type.Optional(Type.Record(Type.String(), parameters)), case_controls: Type.Optional(Type.Record(Type.String(), Type.Object(controlFields))), ...controlFields, ...hostFields })),
       held_out_case_ids: Type.Optional(Type.Array(Type.String(), { maxItems: 64 })), candidate_lag_samples: Type.Optional(Type.Integer()),
       grid: Type.Optional(Type.Record(Type.String(), Type.Array(Type.Union([Type.String(), Type.Number(), Type.Boolean()]), { minItems: 1, maxItems: 8 }), { minProperties: 1, maxProperties: 3 })),
       timeout_seconds: Type.Optional(Type.Integer({ minimum: 10, maximum: 7200, description: 'Whole suite deadline, default 1800 seconds. Abort kills process tree; evidence remains.' })),

@@ -179,6 +179,14 @@ static var execute(const var& request) {
     set(response, "plugin", metadata(*plugin, *selected)); return response;
 }
 int main(int argc, char** argv) {
+    if (argc == 2 && String(argv[1]) == "--capabilities") {
+        // No GUI, scanning or plug-in loading in the capability handshake.
+        auto response = record(), flags = record();
+        for (const auto* key : {"inspect", "render", "state", "automation"}) set(flags, Identifier(key), true);
+        set(response, "host", "fourier-host"); set(response, "protocol_version", 1);
+        set(response, "render_controls_version", 1); set(response, "capabilities", flags);
+        std::cout << JSON::toString(response, true) << '\n'; return 0;
+    }
     if (argc != 5 || String(argv[1]) != "--request" || String(argv[3]) != "--response") { std::cerr << "fourier-host --request FILE --response FILE\n"; return 2; }
     ScopedJuceInitialiser_GUI init;
     var response; int status = 0;

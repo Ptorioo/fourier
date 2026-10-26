@@ -1,14 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { archive, compare } from '../dist/compare.js';
 import { dump, load, readWav, digest, legacyRunFingerprint, sha } from '../dist/io.js';
-import { inspect, run, isolated, validate } from '../dist/runner.js';
+import { run, isolated, validate } from '../dist/runner.js';
 import { create, juce } from '../dist/juce.js';
 import { selfTest } from '../dist/selftest.js';
 import { runBackend } from '../scripts/bridge.mjs';
+import { report } from '../dist/report.js';
 
 const temporary = t => { const dir = mkdtempSync(join(tmpdir(), 'fourier-ts-')); t.after(() => rmSync(dir, { recursive: true, force: true })); return dir; };
 const plan = (plugin = 'builtin:gain', parameters = { gain_db: 6 }) => ({ plugin, sample_rate: 48000, channels: 2, duration: .25, parameters, cases: [{ id: 'tone', stimulus: { kind: 'tone', frequency_hz: 997.3 } }, { id: 'noise', stimulus: { kind: 'noise', seed: 12 } }, { id: 'silence', stimulus: { kind: 'silence' } }] });
@@ -30,9 +31,40 @@ test('runs, resumes, compares and verifies artifacts without Python', async t =>
   const wav = join(out, 'cases', 'tone', 'output.preview.wav'); writeFileSync(wav, 'tampered');
   assert.throws(() => archive(out, 'tone'), /checksum/);
 });
+test('report regeneration verifies fingerprints, required artifacts and checkpoint results before writing', async t => {
+  const dir = temporary(t), file = join(dir, 'spec.json'), out = join(dir, 'run');
+  dump(file, { ...plan(), cases: [plan().cases[0]] });
+  const state = await run(file, out), checkpoint = join(out, 'run.json'), folder = join(out, 'cases', 'tone');
+  const outputs = ['REPORT.md', 'report.json', 'spectrum.svg'].map(name => [name, readFileSync(join(out, name))]);
+  const unchanged = () => { for (const [name, bytes] of outputs) assert.deepEqual(readFileSync(join(out, name)), bytes); };
+  for (const name of ['traces.json', 'audio.npz', 'result.json']) {
+    const path = join(folder, name), bytes = readFileSync(path);
+    writeFileSync(path, 'tampered');
+    assert.throws(() => report(out), /checksum/); unchanged(); writeFileSync(path, bytes);
+  }
+  for (const mutate of [
+    copy => { copy.spec.duration += 1; },
+    copy => { delete copy.fingerprint; },
+    copy => { delete copy.cases[0].artifacts['traces.json']; },
+    copy => { copy.cases[0].result.metrics.gain_db = 100; },
+    copy => { copy.cases[0].id = '../escape'; },
+    copy => { copy.cases[0].status = 'error'; },
+    copy => { copy.cases[0].artifacts['../outside'] = 'bad'; },
+  ]) {
+    const copy = structuredClone(state); mutate(copy); dump(checkpoint, copy);
+    assert.throws(() => report(out), /fingerprint|artifact|checkpoint/i); unchanged();
+  }
+  dump(checkpoint, { ...state, status: 'running' }); assert.equal(report(out).status, 'running');
+  const pending = structuredClone(state); pending.status = 'running'; pending.cases[0] = { id: 'tone', status: 'running' };
+  dump(checkpoint, pending); assert.equal(report(out).status, 'running');
+  dump(checkpoint, state); assert.equal(report(out).status, 'ok'); unchanged();
+  dump(checkpoint, { ...state, fingerprint: legacyRunFingerprint(checkpoint) });
+  assert.equal(report(out).status, 'ok', 'legacy Python fingerprints remain readable');
+});
 test('failed cases are not silently retried and explicit retries preserve evidence', async t => {
   const dir = temporary(t), file = join(dir, 'spec.json'), out = join(dir, 'run'); dump(file, { ...plan(), parameters: { nonexistent: 1 }, cases: [plan().cases[0]] });
   const failed = await run(file, out); assert.equal(failed.status, 'error');
+  assert.equal(report(out).status, 'error');
   await assert.rejects(run(file, out, true), /retry-failed/);
   assert.equal((await run(file, out, true, true)).status, 'error');
 });
@@ -50,7 +82,12 @@ test('PCM WAV ingestion and analysis preserve scale and reject malformed WAV', a
   const pcm = Buffer.alloc(audio[0].length * 2); audio[0].forEach((v, i) => { const value = Math.round(v * 32768); pcm.writeInt16LE(value, i * 2); audio[0][i] = (value || 0) / 32768; }); writeFileSync(wav, Buffer.concat([header, pcm]));
   const [decoded, sr] = readWav(wav); assert.equal(sr, 48000); assert.deepEqual(decoded, audio);
   const result = await runBackend(['analyze', '--output-audio', wav, '--reference', wav, '--out', join(dir, 'analysis')]); assert.equal(result.code, 0, result.stderr);
-  assert.equal(load(join(dir, 'analysis', 'run.json')).cases[0].result.status, 'ok');
+  const checkpoint = join(dir, 'analysis', 'run.json'), state = load(checkpoint);
+  assert.equal(state.cases[0].result.status, 'ok'); assert.ok(state.fingerprint);
+  dump(checkpoint, { ...state, spec: { sample_rate: 8000 } });
+  assert.throws(() => report(join(dir, 'analysis')), /fingerprint/);
+  delete state.fingerprint; dump(checkpoint, state);
+  assert.equal(report(join(dir, 'analysis')).status, 'ok', 'historical WAV reports remain readable with checked artifacts');
   writeFileSync(join(dir, 'bad.wav'), 'RIFF'); assert.throws(() => readWav(join(dir, 'bad.wav')));
 });
 test('JUCE authoring creates both shapes and protects outputs', t => {
