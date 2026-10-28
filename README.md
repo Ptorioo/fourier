@@ -6,7 +6,7 @@
 </p>
 
 <h1 align="center"><i>fourier</i></h1>
-<p align="center">rebuild your favorite VST</p>
+<p align="center"><i>rebuild your favorite VST</i></p>
 
 <h3>Measure the sound. Understand the behavior. Build your own.</h3>
 
