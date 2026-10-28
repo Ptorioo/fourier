@@ -5,11 +5,8 @@
   </picture>
 </p>
 
-<p align="center">
-  <i><b style="font-size: 45px;">fourier</b></i>
-  <br>
-  <i style="font-size: 18px;">rebuild your favorite VST</i>
-</p>
+<h1 align="center"><i>fourier</i></h1>
+<h3 align="center"><i>rebuild your favorite VST</i></h3>
 
 
 ## Measure the sound. Understand the behavior. Build your own.
