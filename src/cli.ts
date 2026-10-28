@@ -13,6 +13,10 @@ import { match } from './match.js';
 import { buildHost, juce } from './juce.js';
 import { hostDoctor } from './host.js';
 import { verify } from './verify.js';
+import { createMatrix } from './matrix.js';
+import { exportModel } from './export-model.js';
+import { transitions } from './transitions.js';
+import { workflow } from './workflow.js';
 import { characterizeEffects } from './effects.js';
 import { identifyEffects } from './effects-identify.js';
 import type { Audio } from './types.js';
@@ -24,9 +28,11 @@ async function readOptions() {
   catch (error) { throw new Error(`Invalid tool options: ${error instanceof Error ? error.message : error}`); }
 }
 export async function main(argv = process.argv.slice(2)) {
-  const command = argv[0], action = ['juce', 'match', 'effects-identify'].includes(command) ? argv[1] : undefined;
+  const command = argv[0], action = ['juce', 'match', 'effects-identify', 'transitions'].includes(command) ? argv[1] : undefined;
   const schemas: Record<string, Record<string, { type: 'string' | 'boolean'; multiple?: boolean }>> = {
-    doctor: {}, 'self-test': {}, 'setup-native': { juce: { type: 'string' }, generator: { type: 'string' }, jobs: { type: 'string' } },
+    doctor: {}, 'self-test': {}, 'setup-native': { juce: { type: 'string' }, generator: { type: 'string' }, jobs: { type: 'string' }, 'build-directory': { type: 'string' }, 'options-stdin': { type: 'boolean' } },
+    matrix: { 'options-stdin': { type: 'boolean' } },
+    workflow: { 'options-stdin': { type: 'boolean' } }, 'export-model': { 'options-stdin': { type: 'boolean' } }, transitions: { 'options-stdin': { type: 'boolean' } },
     juce: { 'options-stdin': { type: 'boolean' } }, match: { 'options-stdin': { type: 'boolean' } },
     'effects-identify': { 'options-stdin': { type: 'boolean' }, 'native-host': { type: 'string' } },
     effects: { run: { type: 'string' }, out: { type: 'string' }, 'options-stdin': { type: 'boolean' } },
@@ -52,7 +58,11 @@ export async function main(argv = process.argv.slice(2)) {
   if (command === 'doctor') {
     return { fourier: version, node: process.version, executable: process.execPath, platform: `${platform()} ${process.arch}`, audio_ready: true, ...hostDoctor(host), sandbox: false, rea: 'Optional: use fourier_rea in Pi; CLI accepts evidence files from any MCP client' };
   }
-  if (command === 'setup-native') return buildHost({ juce_path: required('juce'), ...(values.generator ? { generator: required('generator') } : {}), ...(values.jobs ? { jobs: Number(required('jobs')) } : {}) });
+  if (command === 'setup-native') return buildHost({ ...await options(), ...(values.juce ? { juce_path: required('juce') } : {}), ...(values.generator ? { generator: required('generator') } : {}), ...(values.jobs ? { jobs: Number(required('jobs')) } : {}), ...(values['build-directory'] ? { build_directory: path('build-directory') } : {}) });
+  if (command === 'matrix') return createMatrix(await options());
+  if (command === 'workflow') return workflow(await options());
+  if (command === 'export-model') return exportModel(await options());
+  if (command === 'transitions') return transitions(action ?? '', await options());
   if (command === 'juce') return juce(action ?? '', await options());
   if (command === 'discover') return { plugins: discovery(values.root as string[] | undefined), loaded_plugins: 0 };
   if (command === 'init') {

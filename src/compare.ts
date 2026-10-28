@@ -4,7 +4,9 @@ import { loadAudio } from './archive.js';
 import { arraySha, dump, expand, fields, load, number, sha } from './io.js';
 import { amplitude, db, spectrum, stats } from './measure.js';
 import { safeId, verifiedCase, verifiedRun } from './integrity.js';
-import type { Audio, Result, Samples, State } from './types.js';
+import type { Result, Samples, State } from './types.js';
+import { aligned, candidateError } from './audio-error.js';
+export { aligned } from './audio-error.js';
 
 export function archive(directory: string, caseId: string) {
   const state = verifiedRun(directory);
@@ -19,11 +21,6 @@ export function archive(directory: string, caseId: string) {
   const stimulus = state.spec.cases.find(c => c.id === caseId)?.stimulus;
   if (!stimulus) throw new Error('Missing case in plan');
   return { state, result, stimulus, input, output, sr };
-}
-export function aligned(x: Audio, y: Audio, lag: number): [Audio, Audio] {
-  if (!Number.isInteger(lag) || Math.abs(lag) >= Math.min(x[0].length, y[0].length) - 31) throw new Error('lag_samples must be an integer leaving >=32 aligned frames');
-  const a = Math.max(0, -lag), b = Math.max(0, lag), n = Math.min(x[0].length - a, y[0].length - b);
-  return [x.map(ch => ch.subarray(a, a + n)), y.map(ch => ch.subarray(b, b + n))];
 }
 function windowed(x: Samples, offset: number, n: number): [Float64Array, Float64Array] {
   return spectrum(Float64Array.from({ length: n }, (_, i) => x[offset + i] * (.5 - .5 * Math.cos(2 * Math.PI * i / (n - 1)))));
@@ -51,7 +48,7 @@ function pair(value: unknown, name: string, lo: number, hi: number): [number, nu
 }
 export function compare(directory: string, output: string, value: unknown) {
   directory = expand(directory); output = expand(output);
-  const options = fields(value, ['case_ids', 'candidate_run', 'frequencies_hz', 'window_seconds', 'band_hz', 'times_seconds', 'window_ms', 'lag_samples', 'candidate_lag_samples'], 'comparison option');
+  const options = fields(value, ['case_ids', 'candidate_run', 'frequencies_hz', 'window_seconds', 'band_hz', 'times_seconds', 'window_ms', 'lag_samples', 'candidate_lag_samples', 'reference_floor_dbfs'], 'comparison option');
   const state = load<State>(join(directory, 'run.json')), ids = list(options.case_ids ?? state.cases.map(c => c.id), 'case_ids', 16);
   if (!ids.length || new Set(ids).size !== ids.length || ids.some(id => !safeId(id))) throw new Error('Select 1..16 distinct safe case IDs');
   const frequencies = list(options.frequencies_hz ?? [], 'frequencies_hz', 32), times = list(options.times_seconds ?? [], 'times_seconds', 32);
@@ -63,13 +60,13 @@ export function compare(directory: string, output: string, value: unknown) {
     const ref = archive(directory, id), { sr, stimulus, result } = ref;
     const hzList = frequencies.map(hz => number(hz, 'frequency', 1, sr * .49));
     let candidate: Result['metrics'] | null = null;
-    let comparison: { candidate_identity: State['identity']; candidate_run_sha256: string; lag_samples: number; null_difference: ReturnType<typeof stats>; relative_error_db: (number | null)[] } | null = null;
+    let comparison: (ReturnType<typeof candidateError> & { candidate_identity: State['identity']; candidate_run_sha256: string; relative_error_db: (number | null)[] }) | null = null;
     if (options.candidate_run) {
       const candidateDir = expand(options.candidate_run as string), cand = archive(candidateDir, id);
       if (cand.sr !== sr || cand.input.length !== ref.input.length || arraySha(cand.input) !== arraySha(ref.input) || cand.input[0].length !== ref.input[0].length) throw new Error(`Candidate inputs must match exactly: ${id}`);
       if (cand.output[0].length !== ref.output[0].length) throw new Error('Candidate/reference output lengths must match; no implicit trimming');
-      const [a, b] = aligned(ref.output, cand.output, candidateLag), diff = b.map((ch, c) => ch.map((v, i) => v - a[c][i]));
-      comparison = { candidate_identity: cand.state.identity, candidate_run_sha256: sha(join(candidateDir, 'run.json')), lag_samples: candidateLag, null_difference: stats(diff), relative_error_db: a.map((ch, c) => { let power = 0, error = 0; for (let i = 0; i < ch.length; i++) { power += ch[i] ** 2; error += (b[c][i] - ch[i]) ** 2; } return power ? db(Math.sqrt(error / power)) : null; }) };
+      const error = candidateError(ref.output, cand.output, sr, candidateLag, options.window_seconds, options.reference_floor_dbfs);
+      comparison = { ...error, candidate_identity: cand.state.identity, candidate_run_sha256: sha(join(candidateDir, 'run.json')), relative_error_db: error.channels.map(c => c.relative_error_db) };
       candidate = cand.result.metrics;
     }
     const [x, y] = aligned(ref.input, ref.output, lag), seconds = x[0].length / sr, [start, end] = pair(options.window_seconds ?? [Math.max(0, seconds - 1), seconds], 'window_seconds', 0, seconds), a = Math.round(start * sr), b = Math.round(end * sr);
@@ -99,7 +96,7 @@ export function compare(directory: string, output: string, value: unknown) {
   const limits = [
     'H1 magnitude and wrapped phase are descriptive cross-spectrum estimates, not proof of LTI or an FFT implementation. Low coherence makes them unreliable. Phase includes uncompensated delay; it is not group delay or minimum-phase classification. Single-segment coherence is undefined. Bin levels are Hann-windowed, averaged sine-equivalent peak amplitudes, not PSD or distortion attribution.',
     'Tone gains use the selected steady-state window. Band envelopes use Hann-windowed FFT energy, not calibrated attack/release constants.',
-    'Null comparisons require matching archived inputs; only caller-selected lag is applied. Reported latency is not inferred alignment.',
+    'Null comparisons require matching archived inputs; only caller-selected lag is applied. An explicit window_seconds also restricts candidate error, on the original reference clock. With no window, candidate error covers the full aligned overlap (tone/spectral analysis retains its last-second default). reference_floor_dbfs only changes the reported relative denominator; absolute error and audio remain unmodified.',
     'Artifact hashes detect accidental changes; they do not authenticate an adversarially rewritten run.',
   ];
   mkdirSync(dirname(output), { recursive: true }); mkdirSync(output);
@@ -116,5 +113,5 @@ export function compare(directory: string, output: string, value: unknown) {
   }
   lines.push('', 'Detailed measurements and readbacks: [comparison.json](comparison.json)', '', ...limits);
   writeFileSync(join(output, 'COMPARISON.md'), lines.join('\n') + '\n');
-  return { status: 'ok', directory: output, report: join(output, 'comparison.json'), cases: rows.map(row => ({ id: row.id, channel_tone_gains_db: row.channels.map(c => c.tone_gain_db), candidate_relative_error_db: row.comparison?.relative_error_db ?? null })) };
+  return { status: 'ok', directory: output, report: join(output, 'comparison.json'), cases: rows.map(row => ({ id: row.id, channel_tone_gains_db: row.channels.map(c => c.tone_gain_db), candidate_relative_error_db: row.comparison?.relative_error_db ?? null, candidate_rms_error_dbfs: row.comparison?.channels.map(c => c.rms_error_dbfs) ?? null, candidate_exact_null: row.comparison?.channels.map(c => c.exact_null) ?? null })) };
 }

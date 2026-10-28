@@ -80,7 +80,7 @@ function analyze(suitePath: string, directory: string, output: string, channel: 
 }
 export async function identifyEffects(action: string, raw: unknown) {
   if (!['create', 'run', 'analyze'].includes(action)) throw new Error('Effect identification action must be create, run or analyze');
-  const request = fields(raw, action === 'create' ? ['out_file', ...designKeys, 'neutral_parameters', 'bands', 'families', 'stages'] : action === 'run' ? ['suite', 'out_directory', 'native_host', 'channel'] : ['suite', 'run_directory', 'out_directory', 'channel'], 'effect identification');
+  const request = fields(raw, action === 'create' ? ['out_file', ...designKeys, 'neutral_parameters', 'bands', 'families', 'stages', 'topologies'] : action === 'run' ? ['suite', 'out_directory', 'native_host', 'channel'] : ['suite', 'run_directory', 'out_directory', 'channel'], 'effect identification');
   if (action !== 'create' && (typeof request.suite !== 'string' || typeof request.out_directory !== 'string')) throw new Error('suite and out_directory required');
   const effect = action === 'create' ? request.effect : load<{ design?: { effect?: unknown } }>(expand(request.suite as string)).design?.effect;
   if (typeof effect !== 'string' || !(effectKinds as readonly string[]).includes(effect)) throw new Error('Select a supported effect');

@@ -1,11 +1,20 @@
 import { spawnSync } from 'node:child_process';
-import { realpathSync, statSync } from 'node:fs';
+import { existsSync, realpathSync, statSync } from 'node:fs';
 import { join } from 'node:path';
-import { expand, object, packageRoot, sha } from './io.js';
+import { expand, fields, load, object, packageRoot, sha } from './io.js';
+
+export const workspaceHostFile = () => expand(join('.fourier', 'native-host.json'));
+function workspaceHost(): string | undefined {
+  if (!existsSync(workspaceHostFile())) return undefined;
+  const record = fields(load(workspaceHostFile()), ['schema_version', 'path', 'sha256', 'source_sha256'], 'workspace host');
+  if (record.schema_version !== 1 || typeof record.path !== 'string' || typeof record.sha256 !== 'string') throw new Error('Invalid workspace native-host record');
+  if (sha(expand(record.path)) !== record.sha256) throw new Error('Workspace native host changed; rebuild with setup-native or select an explicit native_host');
+  return expand(record.path);
+}
 
 export type HostFeature = 'inspect' | 'render' | 'state' | 'automation';
 export function nativeHost(explicit?: string): string {
-  const path = explicit ?? process.env.FOURIER_NATIVE_HOST ?? join(packageRoot, 'native', 'build', 'fourier-host' + (process.platform === 'win32' ? '.exe' : ''));
+  const path = explicit ?? process.env.FOURIER_NATIVE_HOST ?? workspaceHost() ?? join(packageRoot, 'native', 'build', 'fourier-host' + (process.platform === 'win32' ? '.exe' : ''));
   if (typeof path !== 'string' || !path.trim()) throw new Error('native_host must be a non-empty executable path');
   try { const real = realpathSync(expand(path)); if (statSync(real).isFile()) return real; } catch { /* Report the selected path, never fall back to another helper. */ }
   throw new Error(`Native host not found: ${path}. Build with setup-native --juce PATH, pass native_host/--native-host, or set FOURIER_NATIVE_HOST. Built-ins and WAV analysis need no helper.`);
@@ -26,7 +35,7 @@ export function checkHost(explicit?: string, required: HostFeature[] = ['inspect
   return { path, sha256: hash, protocol_version: 1, render_controls_version: data.render_controls_version === 1 ? 1 : null, capabilities };
 }
 export function hostDoctor(explicit?: string) {
-  const selection = explicit !== undefined ? 'explicit' : process.env.FOURIER_NATIVE_HOST !== undefined ? 'environment' : 'package';
+  const selection = explicit !== undefined ? 'explicit' : process.env.FOURIER_NATIVE_HOST !== undefined ? 'environment' : existsSync(workspaceHostFile()) ? 'workspace' : 'package';
   try {
     const host = checkHost(explicit, []);
     return { plugins_ready: host.capabilities.inspect && host.capabilities.render, state_ready: host.capabilities.state, automation_ready: host.capabilities.automation, native_host: host.path, host_selection: selection, host, host_error: null };

@@ -1,7 +1,8 @@
 import { spawnSync } from 'node:child_process';
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, statSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { dump, expand, fields, integer, load, packageRoot } from './io.js';
+import { digest, dump, expand, fields, integer, load, packageRoot, sha } from './io.js';
+import { checkHost, workspaceHostFile } from './host.js';
 
 function identifier(value: unknown, name: string, pattern = /^[A-Za-z][A-Za-z0-9]{0,47}$/): string {
   if (typeof value !== 'string' || !pattern.test(value)) throw new Error(`Invalid ${name}: ${value}`);
@@ -68,12 +69,24 @@ export function build(projectDirectory: unknown, options: Record<string, unknown
   return { status: 'ok', project_directory: directory, plugin, configuration: settings.configuration, configure_log: configureLog, build_log: buildLog, installed: false, next: 'Inspect plugin, then plan and run it. Loading the build executes native code; only load trusted source.' };
 }
 export function buildHost(options: Record<string, unknown>) {
-  const settings = buildOptions(options), directory = join(packageRoot, 'native'), buildDirectory = join(directory, 'build'); mkdirSync(buildDirectory, { recursive: true });
-  runCmake([settings.cmake, '-S', directory, '-B', buildDirectory, `-DFOURIER_JUCE_PATH:PATH=${settings.juce}`, `-DCMAKE_BUILD_TYPE=${settings.configuration}`, ...(settings.generator ? ['-G', settings.generator] : [])], join(buildDirectory, 'configure.log'));
-  runCmake([settings.cmake, '--build', buildDirectory, '--config', settings.configuration, '--target', 'fourier-host', '--parallel', String(settings.jobs)], join(buildDirectory, 'build.log'));
-  const host = join(buildDirectory, `fourier-host${process.platform === 'win32' ? '.exe' : ''}`);
-  if (!existsSync(host) || !statSync(host).isFile()) throw new Error(`Native host artifact missing: ${host}`);
-  return { status: 'ok', host, installed: false };
+  fields(options, ['juce_path', 'configuration', 'generator', 'jobs', 'build_directory', 'activate'], 'native build option');
+  if (options.build_directory !== undefined && (typeof options.build_directory !== 'string' || !options.build_directory.trim())) throw new Error('build_directory must be a non-empty path');
+  if (options.activate !== undefined && typeof options.activate !== 'boolean') throw new Error('activate must be boolean');
+  const settings = buildOptions(options), directory = join(packageRoot, 'native'), buildDirectory = expand(options.build_directory as string ?? join('.fourier', 'native-host'));
+  if (buildDirectory === directory || buildDirectory === packageRoot) throw new Error('Select a separate native build directory');
+  mkdirSync(buildDirectory, { recursive: true });
+  const lock = join(buildDirectory, '.fourier-build.lock'), fd = openSync(lock, 'wx');
+  try {
+    const configureLog = join(buildDirectory, 'configure.log'), buildLog = join(buildDirectory, 'build.log');
+    runCmake([settings.cmake, '-S', directory, '-B', buildDirectory, `-DFOURIER_JUCE_PATH:PATH=${settings.juce}`, `-DCMAKE_BUILD_TYPE=${settings.configuration}`, ...(settings.generator ? ['-G', settings.generator] : [])], configureLog);
+    runCmake([settings.cmake, '--build', buildDirectory, '--config', settings.configuration, '--target', 'fourier-host', '--parallel', String(settings.jobs)], buildLog);
+    const host = join(buildDirectory, `fourier-host${process.platform === 'win32' ? '.exe' : ''}`);
+    if (!existsSync(host) || !statSync(host).isFile()) throw new Error(`Native host artifact missing: ${host}`);
+    const capabilities = checkHost(host, ['inspect', 'render', 'state', 'automation']);
+    const record = { schema_version: 1, path: host, sha256: capabilities.sha256, source_sha256: digest(['CMakeLists.txt', 'main.cpp'].map(f => sha(join(directory, f)))) };
+    if (options.activate !== false) dump(workspaceHostFile(), record);
+    return { status: 'ok', host, native_host: host, build_directory: buildDirectory, configure_log: configureLog, build_log: buildLog, activated: options.activate !== false, workspace_record: options.activate !== false ? workspaceHostFile() : null, capabilities, installed: false };
+  } finally { closeSync(fd); rmSync(lock, { force: true }); }
 }
 export function juce(action: string, value: unknown) {
   const allowed: Record<string, string[]> = { doctor: ['juce_path'], create: ['project_directory', 'name', 'kind', 'manufacturer_code', 'plugin_code', 'dsp'], build: ['project_directory', 'juce_path', 'configuration', 'generator', 'jobs'] };

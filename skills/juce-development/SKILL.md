@@ -10,7 +10,7 @@ description: >-
 
 Use for creating or editing JUCE effects/instruments, not only inspecting existing
 plug-ins. Read the “Write VST3 plug-ins with JUCE” section of the package
-[README](../../README.md) and the generated project's README. Use the installed JUCE version's
+[agent guide](../../AGENTS.md#write-vst3-plug-ins-with-juce) and the generated project's README. Use the installed JUCE version's
 `docs/CMake API.md`, module headers and examples for version-specific APIs.
 
 ## Backend and host setup
@@ -25,11 +25,33 @@ just file presence, without loading a plug-in. Pass explicit `native_host` (CLI
 `--native-host`) to doctor/inspection/plans/runs/suites when selecting an external
 helper; explicit selections override defaults and never silently fall back.
 Build the optional C++ JUCE
-host with `npm run setup:native -- --juce /absolute/path/to/JUCE` (optionally
-`--generator Ninja` from a compiler developer shell), or set `FOURIER_NATIVE_HOST`
-to a compatible `fourier-host` executable. This uses the operator's local trusted
+host with `fourier_setup_native({juce_path:'/absolute/path/to/JUCE'})`: packaged
+`native/` builds into `<cwd>/.fourier/native-host`, not the package directory.
+A capability check precedes a hash-pinned workspace selection; `activate:false`
+disables selection and `build_directory` overrides the output location. Explicit
+hosts and `FOURIER_NATIVE_HOST` take precedence; changed selected binaries fail.
+Alternatively select an existing compatible `fourier-host` executable. This uses the operator's local trusted
 SDK/toolchain; it never downloads JUCE or installs a system plug-in. Built-in
 calibration and PCM WAV analysis work without the helper.
+
+## Compact orchestration and fitted-model export
+
+Read [Replication and compact workflows](../../AGENTS.md#replication-tools-and-low-token-workflows). Prefer
+`fourier_workflow` after choosing explicit controls: chain identification,
+`export-model`, `juce.build`, inspection, matrices, renders and verification using
+internal `{"$ref":"earlierStep.field"}` references. Compact summaries cross the
+model boundary; full results/checkpoints remain on disk. Avoid repetitive tool
+calls and routine JSON reads. It is not a sandbox; explicit step paths may be
+outside its checkpoint root. A separate MCP server is unnecessary for Pi.
+
+`fourier_export_model({report,project_directory,name,row_ids})` generates editable
+JUCE source from accepted isolated EQ/filter fits (1–7 rows, one per band), with
+sample-rate-adaptive double-precision SOS and provenance. Ambiguous fits require
+explicit `allow_ambiguous:true`. It refuses unaccepted fits and existing projects.
+This is a **fixed-control surrogate**, not a recovered full plug-in: no fitted
+control laws, automation/state behavior, neutral-baseline coloration or vendor UI
+are exported. Build with `fourier_juce`, then validate independent inputs/rates.
+Other effects retain the ordinary hand-editable starters.
 
 ## Workflow
 
@@ -104,17 +126,27 @@ calibration and PCM WAV analysis work without the helper.
    inspect event/initial/final readbacks. APVTS state does not restore active
    voices/delay memory. Use `fourier_match` to create/run paired reference/candidate
    suites with explicit candidate mappings; `fit` searches a bounded grid and
-   scores held-out IDs only after choosing the winner. Use `fourier_characterize`
+   `optimize` jointly searches 1–8 numeric controls with bounded local Nelder–Mead
+   (up to 128 evaluations). Both score held-out IDs only after choosing the winner.
+   Native optimization bounds are normalized; built-ins retain physical units.
+   Use `window_seconds` and absolute or relative sample error, with an explicit
+   reference floor only when intended. `fourier_matrix` expands bounded explicit
+   parameter/stimulus/settings axes. `fourier_transitions` creates fixed endpoint
+   and automated renders with snapshots and held-out output-interpolation fits;
+   it does not recover hidden-state laws or coefficient smoothing. Use `fourier_characterize`
    for offline dynamics, coherent THD/selected IMD and impulse energy-decay fits.
    Use unified `fourier_effects` for verified responses including EQ/filter,
-   `fourier_verify` for declarative bounds, and `fourier_effects_identify` for
+   `fourier_verify` for declarative bounds including windowed absolute RMS/peak
+   candidate errors (linear amplitude or dBFS) and explicitly floored relative error, and `fourier_effects_identify` for
    reusable model/control-law experiments. EQ/filter retain explicit neutral/band
-   isolation and phase-aware RBJ fitting. Other fits are static dynamics,
+   isolation and phase-aware RBJ/Butterworth fitting (explicit 1–8 SOS sections,
+   identical or distinct resonance-scaled sections, band-transformed notch/bell,
+   peak/skirt band-pass normalization). Defaults remain 1–2 sections. Other fits are static dynamics,
    memoryless waveshapers, integer-feedback delay, RT60 decay or sinusoidal carrier
    trajectories—not unique proprietary topology or reverb/modulation reconstruction.
    These tools replace
    routine ad hoc report-parsing scripts, not independent reference validation.
-   Read the audio-analysis skill/README for bounds and measurement caveats.
+   Read the audio-analysis skill/AGENTS.md for bounds and measurement caveats.
 
 The build tool accepts generated projects with `fourier-project.json`; it is not
 an arbitrary CMake command runner. If renaming a target, update the manifest's
@@ -123,7 +155,7 @@ Inside Pi, use `fourier_juce` and the other structured `fourier_*` tools for
 Fourier operations, not shell calls to `fourier.mjs` or handwritten argument
 lists. If only this skill is installed, ask the user to install/reload the
 extension. Tool errors must not fall back to CLI execution. The standalone CLI
-is for explicitly requested non-Pi/CLI workflows; see the package README. Its
+is for explicitly requested non-Pi/CLI workflows; see the package agent guide. Its
 outer limit is 10 minutes, while Pi's build tool uses its explicit whole-operation
 time limit. Normal source editing and explicitly requested trusted CMake builds
 in a developer shell remain appropriate.

@@ -6,6 +6,7 @@ import { digest, dump, expand, fields, identity, integer, load, number, object, 
 import { make } from './signals.js';
 import { controls, params } from './controls.js';
 import { checkHost } from './host.js';
+import { parameterWarnings } from './metadata.js';
 import { report } from './report.js';
 import { safeId, verifiedCase } from './integrity.js';
 export { safeId, artifactPath, verifyArtifacts } from './integrity.js';
@@ -119,8 +120,9 @@ export async function inspect(plugin: string, directory: string, timeout = 30, p
   mkdirSync(dirname(directory), { recursive: true }); mkdirSync(directory);
   const result = await isolated({ operation: 'inspect', plugin: ident.path, plugin_name: pluginName, ...(host ? { native_host: host.path, native_host_sha256: host.sha256 } : {}), output: directory, parameters: {} }, directory, timeout);
   if (digest(identity(plugin)) !== digest(ident) || host && sha(host.path) !== host.sha256) throw new Error('Plug-in or host changed during inspection');
-  dump(join(directory, 'inspection.json'), { identity: ident, ...(host ? { native_host: host } : {}), ...result });
+  const metadata_warnings = result.plugin ? parameterWarnings(result.plugin) : [];
+  dump(join(directory, 'inspection.json'), { identity: ident, ...(host ? { native_host: host } : {}), ...result, metadata_warnings });
   const parameters = result.plugin?.parameters, keys = Object.keys(parameters ?? {});
   const summary = result.plugin ? { ...result.plugin, parameters: Object.fromEntries(keys.slice(0, 16).map(key => [key, { ...parameters![key], value: typeof parameters![key].value === 'string' ? parameters![key].value.slice(0, 256) : parameters![key].value, ...(parameters![key].valid_values ? { valid_values: parameters![key].valid_values!.slice(0, 16).map(value => typeof value === 'string' ? value.slice(0, 128) : value), valid_values_truncated: parameters![key].valid_values!.length > 16 || parameters![key].valid_values_truncated } : {}) }])) } : undefined;
-  return { directory, identity: ident, ...(host ? { native_host: host } : {}), ...result, ...(summary ? { plugin: summary, parameter_count: keys.length, parameters_truncated: keys.length > 16, inspection: join(directory, 'inspection.json') } : {}) };
+  return { directory, identity: ident, ...(host ? { native_host: host } : {}), ...result, metadata_warnings: metadata_warnings.slice(0, 16), metadata_warning_count: metadata_warnings.length, metadata_warnings_truncated: metadata_warnings.length > 16, ...(summary ? { plugin: summary, parameter_count: keys.length, parameters_truncated: keys.length > 16, inspection: join(directory, 'inspection.json') } : {}) };
 }

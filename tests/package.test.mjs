@@ -6,13 +6,16 @@ import { dirname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { packageRoot } from '../scripts/bridge.mjs';
 
-test('README local links resolve to included files', () => {
-  const readme = readFileSync(resolve(packageRoot, 'README.md'), 'utf8');
-  for (const [, target] of readme.matchAll(/\]\(([^)]+)\)/g)) {
-    if (/^(?:[a-z]+:|#)/i.test(target)) continue;
-    assert.ok(existsSync(resolve(packageRoot, target.split('#')[0])), `Missing README target: ${target}`);
-  }
-});
+for (const file of ['README.md', 'AGENTS.md', 'skills/audio-analysis/SKILL.md', 'skills/juce-development/SKILL.md']) {
+  test(`${file} local links resolve to included files`, () => {
+    const path = resolve(packageRoot, file);
+    const markdown = readFileSync(path, 'utf8');
+    for (const [, target] of markdown.matchAll(/\]\(([^)]+)\)/g)) {
+      if (/^(?:[a-z]+:|#)/i.test(target)) continue;
+      assert.ok(existsSync(resolve(dirname(path), target.split('#')[0])), `Missing ${file} target: ${target}`);
+    }
+  });
+}
 
 test('npm package includes TypeScript backend, native source, templates and both skills', { skip: !process.env.npm_execpath }, t => {
   const packed = execFileSync(process.execPath, [process.env.npm_execpath, 'pack', '--dry-run', '--json', '--ignore-scripts'], {
@@ -21,6 +24,8 @@ test('npm package includes TypeScript backend, native source, templates and both
   const manifest = JSON.parse(packed)[0];
   assert.equal(manifest.name, '@ptorioo/fourier');
   const files = new Set(manifest.files.map(file => file.path));
+  assert.ok(files.has('AGENTS.md'));
+  assert.ok(files.has('README.md'));
   assert.ok(files.has('dist/cli.js'));
   assert.ok(files.has('dist/.build.json'));
   assert.ok(files.has('dist/integrity.js'));

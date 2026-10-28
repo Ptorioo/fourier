@@ -1,6 +1,7 @@
 .fourier/
 .pi/
 .vscode/
+*.log
 runs/
 node_modules/
 *.tgz

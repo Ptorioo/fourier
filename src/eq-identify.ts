@@ -2,14 +2,14 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { params } from './controls.js';
 import { eqFrequencies, eqResponse, type EqPoint } from './eq.js';
-import { eqFamilies, fitEq, type EqFamily } from './eq-model.js';
+import { eqFamilies, eqTopologies, fitEq, type EqFamily, type EqTopology } from './eq-model.js';
 import { digest, dump, expand, fields, identity, integer, load, number, sha, stringify } from './io.js';
 import { run, safeId, validate } from './runner.js';
 import type { Case, Scalar, State } from './types.js';
 
 interface Experiment { id: string; band: string; parameter: string | null; value: Scalar | null; held_out: boolean }
 function design(raw: unknown) {
-  const o = fields(raw, ['effect', 'plugin', 'plugin_name', 'native_host', 'neutral_parameters', 'bands', 'sample_rate', 'channels', 'duration', 'buffer_size', 'timeout_seconds', 'families', 'stages'], 'EQ identification design');
+  const o = fields(raw, ['effect', 'plugin', 'plugin_name', 'native_host', 'neutral_parameters', 'bands', 'sample_rate', 'channels', 'duration', 'buffer_size', 'timeout_seconds', 'families', 'stages', 'topologies'], 'EQ identification design');
   if (o.effect !== 'eq' && o.effect !== 'filter') throw new Error('EQ effect must be eq or filter');
   if (typeof o.plugin !== 'string') throw new Error('Explicit plugin required');
   const neutral = params(o.neutral_parameters);
@@ -42,11 +42,13 @@ function design(raw: unknown) {
   }
   const families = o.families ?? [...eqFamilies], stages = o.stages ?? [1, 2];
   if (!Array.isArray(families) || !families.length || new Set(families).size !== families.length || families.some(f => !eqFamilies.includes(f))) throw new Error('families must select distinct supported RBJ families');
-  if (!Array.isArray(stages) || !stages.length || stages.length > 4 || new Set(stages).size !== stages.length || stages.some(s => !Number.isInteger(s) || s < 1 || s > 4)) throw new Error('stages must select distinct integers 1..4');
-  const { effect: _effect, bands: _bands, neutral_parameters: _neutral, families: _families, stages: _stages, ...settings } = o;
+  if (!Array.isArray(stages) || !stages.length || stages.length > 8 || new Set(stages).size !== stages.length || stages.some(s => !Number.isInteger(s) || s < 1 || s > 8)) throw new Error('stages must select distinct integers 1..8');
+  const topologies = o.topologies ?? [...eqTopologies];
+  if (!Array.isArray(topologies) || !topologies.length || new Set(topologies).size !== topologies.length || topologies.some(t => !eqTopologies.includes(t))) throw new Error('topologies must select identical and/or butterworth');
+  const { effect: _effect, bands: _bands, neutral_parameters: _neutral, families: _families, stages: _stages, topologies: _topologies, ...settings } = o;
   const plan = validate({ ...settings, plugin: o.plugin, duration, parameters: neutral, cases });
   if (plan.duration * plan.sample_rate * plan.channels * cases.length * 8 > 512_000_000) throw new Error('EQ identification exceeds 512 MB raw archive budget');
-  return { effect: o.effect, plan, experiments, families: families as EqFamily[], stages: stages as number[] };
+  return { effect: o.effect, plan, experiments, families: families as EqFamily[], stages: stages as number[], topologies: topologies as EqTopology[] };
 }
 function readSuite(path: string) {
   const value = fields(load(expand(path)), ['schema_version', 'design'], 'EQ identification suite');
@@ -97,11 +99,11 @@ function analyze(suitePath: string, directory: string, output: string, channel: 
       const b = baseline.points[i];
       return { ...p, gain_db: p.gain_db === null || b.gain_db === null ? null : p.gain_db - b.gain_db, phase_degrees: p.phase_degrees === null || b.phase_degrees === null ? null : ((p.phase_degrees - b.phase_degrees + 540) % 360) - 180 };
     });
-    return { ...experiment, parameters: measured.source.result.plugin?.parameters ?? null, fit: fitEq(points, state.spec.sample_rate, suite.families, suite.stages), points };
+    return { ...experiment, parameters: measured.source.result.plugin?.parameters ?? null, fit: fitEq(points, state.spec.sample_rate, suite.families, suite.stages, suite.topologies), points };
   });
   const mappings = [...new Set(rows.filter(r => r.parameter).map(r => `${r.band}\0${r.parameter}`))].map(key => {
     const selected = rows.filter(r => `${r.band}\0${r.parameter}` === key), [band, parameter] = key.split('\0');
-    const topologyConsistent = new Set(selected.map(r => `${r.fit.best.model.family}/${r.fit.best.model.stages}`)).size === 1;
+    const topologyConsistent = new Set(selected.map(r => `${r.fit.best.model.family}/${r.fit.best.model.stages}/${r.fit.best.model.topology}/${r.fit.best.model.bandpass_gain}`)).size === 1;
     const targets = (['frequency_hz', 'q', 'gain_db'] as const).map(target => {
       const samples = selected.map(r => ({ case_id: r.id, value: r.value, held_out: r.held_out, fitted_value: r.fit.accepted && r.fit.best.model.family !== 'flat' && (target !== 'gain_db' || ['bell', 'low_shelf', 'high_shelf'].includes(r.fit.best.model.family)) ? r.fit.best.model[target] * (target === 'gain_db' ? r.fit.best.model.stages : 1) : null, ambiguous: r.fit.ambiguous }));
       const numeric = samples.filter(s => typeof s.value === 'number' && s.fitted_value !== null).map(s => ({ x: s.value as number, y: s.fitted_value!, held_out: s.held_out }));
@@ -126,7 +128,7 @@ function analyze(suitePath: string, directory: string, output: string, channel: 
 }
 export async function identifyEq(action: string, raw: unknown) {
   if (action === 'create') {
-    const o = fields(raw, ['out_file', 'effect', 'plugin', 'plugin_name', 'native_host', 'neutral_parameters', 'bands', 'sample_rate', 'channels', 'duration', 'buffer_size', 'timeout_seconds', 'families', 'stages'], 'EQ identification create');
+    const o = fields(raw, ['out_file', 'effect', 'plugin', 'plugin_name', 'native_host', 'neutral_parameters', 'bands', 'sample_rate', 'channels', 'duration', 'buffer_size', 'timeout_seconds', 'families', 'stages', 'topologies'], 'EQ identification create');
     if (typeof o.out_file !== 'string') throw new Error('out_file required');
     const { out_file, ...configuration } = o, suite = design(configuration), path = expand(out_file);
     // Resolve the selected artifact, but do not load it during suite creation.

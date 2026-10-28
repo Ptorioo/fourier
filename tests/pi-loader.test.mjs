@@ -25,7 +25,10 @@ async function loadFourier() {
     assert.ok(skillResult.skills[0].description.length > 20);
   }
   const tools = loaded.extensions[0].tools;
-  assert.equal(tools.size, 15);
+  assert.equal(tools.size, 20);
+  for (const name of ['fourier_workflow', 'fourier_transitions', 'fourier_export_model']) assert.ok(tools.has(name));
+  assert.ok(tools.has('fourier_matrix'));
+  assert.ok(tools.has('fourier_setup_native'));
   assert.equal(tools.has('fourier_eq'), false);
   assert.equal(tools.has('fourier_eq_identify'), false);
   assert.deepEqual(tools.get('fourier_plan').definition.parameters.properties.preset.anyOf.map(option => option.const), ['effect', 'generator']);
@@ -68,6 +71,8 @@ test('actual Pi loader registers and executes Fourier tools', { skip: !required 
     await invoke('fourier_effects_identify', { action: 'create', effect: 'eq', plugin: 'builtin:gain', out_file: identificationSuite, neutral_parameters: { gain_db: 0 }, bands: [{ id: 'test', parameters: { gain_db: 6 } }], duration: .5, channels: 1, families: ['bell'], stages: [1] });
     const identified = await invoke('fourier_effects_identify', { action: 'run', suite: identificationSuite, out_directory: join(directory, 'identified') });
     assert.equal(JSON.parse(identified.content[0].text).fits, 1);
+    const exported = JSON.parse((await invoke('fourier_export_model', { report: JSON.parse(identified.content[0].text).report, project_directory: join(directory, 'exported'), name: 'ExportedGain', allow_ambiguous: true })).content[0].text);
+    assert.equal(exported.sections, 0); assert.ok(existsSync(exported.provenance));
     const controlled = join(directory, 'controlled.json');
     await invoke('fourier_plan', {
       plugin: 'builtin:gain', preset: 'effect', out_file: controlled, duration: .3, parameters: { gain_db: -3 },
@@ -114,6 +119,12 @@ test('actual Pi loader registers and executes Fourier tools', { skip: !required 
     await invoke('fourier_match', { action: 'create', reference_plan: controlled, candidate: { plugin: 'builtin:gain' }, held_out_case_ids: ['probe', 'multitone'], out: suite }, { cwd: packageRoot });
     const fitted = await invoke('fourier_match', { action: 'fit', suite, out: join(directory, 'fitted'), grid: { gain_db: [-6, -3, 0] } }, { cwd: packageRoot });
     assert.equal(JSON.parse(fitted.content[0].text).best_tested_parameters.gain_db, -3);
+    const batched = JSON.parse((await invoke('fourier_workflow', { out_directory: join(directory, 'workflow'), steps: [
+      { id: 'matrix', operation: 'matrix', arguments: { plan_file: controlled, out_directory: join(directory, 'matrix'), axes: [{ kind: 'setting', name: 'sample_rate', values: [44100, 48000] }, { kind: 'parameter', name: 'gain_db', values: [-6, 0] }] } },
+      { id: 'render', operation: 'run', arguments: { spec_path: { $ref: 'matrix.plans.0.spec_path' }, out_directory: join(directory, 'matrix-run') } },
+      { id: 'check', operation: 'verify', arguments: { run_directory: { $ref: 'render.directory' }, out_directory: join(directory, 'matrix-verify'), checks: [{ case_id: 'tone_m0', metric: 'tone_gain_db', window_seconds: [.05, .15], min: -6.001, max: -5.999 }] } },
+    ] })).content[0].text);
+    assert.equal(batched.completed, 3); assert.equal(batched.last_result.passed, true); assert.ok(JSON.stringify(batched).length < 3000);
     const rea = await invoke('fourier_rea', { action: 'call', tool: 'binary_session', save_directory: directory }, {
       cwd: packageRoot, tools: [{ name: 'mcp' }], executeTool: async (name, args) => {
         assert.equal(name, 'mcp'); assert.equal(args.tool, 'rea_binary_session');
