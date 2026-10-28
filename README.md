@@ -1,9 +1,5 @@
 <p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/logo-dark.png">
-    <source media="(prefers-color-scheme: light)" srcset="assets/logo.png">
-    <img src="assets/logo.png" width="220" alt="Fourier">
-  </picture>
+  <img src="assets/logo.png" width="220" alt="Fourier">
 </p>
 
 <h1 align="center"><i>fourier</i></h1>
