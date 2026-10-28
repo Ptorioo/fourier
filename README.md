@@ -6,10 +6,9 @@
 </p>
 
 <h1 align="center"><i>fourier</i></h1>
-<h3 align="center"><i>rebuild your favorite VST</i></h3>
+<p align="center">rebuild your favorite VST</p>
 
-
-## Measure the sound. Understand the behavior. Build your own.
+<h3>Measure the sound. Understand the behavior. Build your own.</h3>
 
 Fourier gives your [Pi coding agent](https://github.com/earendil-works/pi) a local audio lab and a JUCE workbench. Probe an existing plug-in, turn measurements into DSP hypotheses, and build an editable VST3 effect or instrument—then test it against the original.
 
